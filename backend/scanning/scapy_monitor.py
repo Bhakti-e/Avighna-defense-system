@@ -20,13 +20,45 @@ from datetime import datetime
 import socket
 
 try:
-    from scapy.all import sniff, ARP, Dot11, Dot11ProbeReq, get_if_list, IP, TCP
+    from scapy.all import sniff, ARP, Dot11, Dot11ProbeReq, get_if_list, IP, TCP, UDP, DNS, DNSQR, DNSRR
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
     logging.warning("Scapy not available - passive monitoring disabled")
 
 logger = logging.getLogger(__name__)
+
+# Import brute force detector
+try:
+    from .brute_force_detector import brute_force_detector
+    BRUTE_FORCE_DETECTION_ENABLED = True
+except ImportError:
+    BRUTE_FORCE_DETECTION_ENABLED = False
+    logger.warning("Brute force detector not available")
+
+# Import DNS anomaly detector
+try:
+    from .dns_anomaly_detector import dns_anomaly_detector
+    DNS_ANOMALY_DETECTION_ENABLED = True
+except ImportError:
+    DNS_ANOMALY_DETECTION_ENABLED = False
+    logger.warning("DNS anomaly detector not available")
+
+# Import brute force detector
+try:
+    from .brute_force_detector import brute_force_detector
+    BRUTE_FORCE_DETECTION_ENABLED = True
+except ImportError:
+    BRUTE_FORCE_DETECTION_ENABLED = False
+    logger.warning("Brute force detector not available")
+
+# Import DNS anomaly detector
+try:
+    from .dns_anomaly_detector import dns_anomaly_detector
+    DNS_ANOMALY_DETECTION_ENABLED = True
+except ImportError:
+    DNS_ANOMALY_DETECTION_ENABLED = False
+    logger.warning("DNS anomaly detector not available")
 
 
 class ScapyNetworkMonitor:
@@ -68,11 +100,14 @@ class ScapyNetworkMonitor:
             'packets_processed': 0,
             'arp_packets': 0,
             'tcp_packets': 0,
+            'udp_packets': 0,
+            'dns_packets': 0,
             'syn_packets': 0,
             'probe_requests': 0,
             'devices_discovered': 0,
             'attacks_detected': 0,
             'port_scans_detected': 0,
+            'dns_anomalies_detected': 0,
             'started_at': None
         }
     
@@ -230,8 +265,83 @@ class ScapyNetworkMonitor:
         except Exception as e:
             logger.error(f"Error processing WiFi packet: {e}")
     
+    def _handle_dns_packet(self, packet):
+        """Process DNS packet - detect DNS anomalies"""
+        try:
+            if not packet.haslayer(DNS) or not packet.haslayer(IP):
+                return
+            
+            self.stats['dns_packets'] += 1
+            
+            dns = packet[DNS]
+            ip = packet[IP]
+            
+            src_ip = ip.src
+            timestamp = time.time()
+            
+            # Only process DNS queries (not responses)
+            if dns.qr == 0 and dns.qdcount > 0:  # qr=0 means query
+                # Extract query information
+                query = dns.qd
+                if query:
+                    domain = query.qname.decode('utf-8', errors='ignore').strip('.')
+                    qtype_num = query.qtype
+                    
+                    # Map query type number to name
+                    qtype_map = {
+                        1: 'A',
+                        2: 'NS',
+                        5: 'CNAME',
+                        6: 'SOA',
+                        12: 'PTR',
+                        15: 'MX',
+                        16: 'TXT',
+                        28: 'AAAA',
+                        33: 'SRV',
+                        255: 'ANY'
+                    }
+                    qtype = qtype_map.get(qtype_num, f'TYPE{qtype_num}')
+                    
+                    # DNS ANOMALY DETECTION
+                    if DNS_ANOMALY_DETECTION_ENABLED:
+                        dns_anomaly_detector.track_dns_query(
+                            src_ip=src_ip,
+                            domain=domain,
+                            qtype=qtype,
+                            response_code=0,  # We don't have response code in query
+                            timestamp=timestamp
+                        )
+                    
+                    logger.debug(f"DNS query: {src_ip} → {domain} ({qtype})")
+            
+            # Process DNS responses (for NXDOMAIN detection)
+            elif dns.qr == 1 and dns.qdcount > 0:  # qr=1 means response
+                query = dns.qd
+                if query:
+                    domain = query.qname.decode('utf-8', errors='ignore').strip('.')
+                    response_code = dns.rcode  # 0=success, 3=NXDOMAIN
+                    
+                    # Track failed queries
+                    if response_code == 3 and DNS_ANOMALY_DETECTION_ENABLED:
+                        qtype_num = query.qtype
+                        qtype_map = {1: 'A', 2: 'NS', 5: 'CNAME', 6: 'SOA', 12: 'PTR', 15: 'MX', 16: 'TXT', 28: 'AAAA', 33: 'SRV', 255: 'ANY'}
+                        qtype = qtype_map.get(qtype_num, f'TYPE{qtype_num}')
+                        
+                        dns_anomaly_detector.track_dns_query(
+                            src_ip=src_ip,
+                            domain=domain,
+                            qtype=qtype,
+                            response_code=response_code,
+                            timestamp=timestamp
+                        )
+                        
+                        logger.debug(f"DNS NXDOMAIN: {src_ip} → {domain}")
+        
+        except Exception as e:
+            logger.error(f"Error processing DNS packet: {e}")
+    
     def _handle_tcp_packet(self, packet):
-        """Process TCP packet - detect port scanning"""
+        """Process TCP packet - detect port scanning and brute force attacks"""
         try:
             if not packet.haslayer(TCP) or not packet.haslayer(IP):
                 return
@@ -248,6 +358,75 @@ class ScapyNetworkMonitor:
             
             timestamp = time.time()
             
+            # BRUTE FORCE DETECTION
+            if BRUTE_FORCE_DETECTION_ENABLED:
+                brute_force_detector.track_connection_attempt(
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    flags=flags,
+                    timestamp=timestamp
+                )
+            
+            # WHITELIST: Ignore legitimate traffic sources
+            WHITELISTED_IPS = [
+                '8.8.8.8', '8.8.4.4',  # Google DNS
+                '1.1.1.1', '1.0.0.1',  # Cloudflare DNS
+                '208.67.222.222', '208.67.220.220',  # OpenDNS
+            ]
+            
+            # Whitelist AWS, Google, Microsoft, Cloudflare IP ranges (simplified)
+            WHITELISTED_PREFIXES = [
+                '18.',  # AWS
+                '52.',  # AWS
+                '54.',  # AWS
+                '3.',   # AWS
+                '13.',  # AWS/Microsoft
+                '20.',  # Microsoft
+                '40.',  # Microsoft
+                '104.', # Microsoft/Cloudflare
+                '172.', # Various CDNs
+                '151.', # Cloudflare/Fastly
+                '142.', # Various CDNs
+                '98.',  # Microsoft
+                '100.', # Various CDNs
+                '32.',  # Various CDNs
+                '44.',  # AWS
+                '34.',  # Google Cloud
+            ]
+            
+            # Whitelist common legitimate ports
+            LEGITIMATE_PORTS = {
+                80, 443,  # HTTP/HTTPS
+                53,       # DNS
+                123,      # NTP
+                22,       # SSH (if you use it)
+                3389,     # RDP (if you use it)
+            }
+            
+            # Check if source is whitelisted
+            if src_ip in WHITELISTED_IPS:
+                return
+            
+            for prefix in WHITELISTED_PREFIXES:
+                if src_ip.startswith(prefix):
+                    return
+            
+            # Check if destination port is legitimate
+            if dst_port in LEGITIMATE_PORTS:
+                return
+            
+            # Get local network info
+            try:
+                local_ip = socket.gethostbyname(socket.gethostname())
+                local_network_prefix = '.'.join(local_ip.split('.')[:3])
+            except:
+                local_network_prefix = '192.168.0'
+            
+            # Ignore traffic from router/gateway
+            if src_ip.endswith('.1') or src_ip.endswith('.254'):
+                return
+            
             # Detect SYN packets (port scan indicator)
             if flags & 0x02:  # SYN flag
                 self.stats['syn_packets'] += 1
@@ -263,7 +442,7 @@ class ScapyNetworkMonitor:
                 scan_data['targets'].add(dst_ip)
                 scan_data['syn_packets'] += 1
                 
-                # VERBOSE LOGGING
+                # VERBOSE LOGGING (reduced)
                 logger.info(f"🔍 [TCP SYN] {src_ip} → {dst_ip}:{dst_port}")
                 
                 # Check if this looks like a port scan
@@ -271,20 +450,31 @@ class ScapyNetworkMonitor:
                 num_ports = len(scan_data['ports'])
                 num_targets = len(scan_data['targets'])
                 
-                # Port scan detection thresholds
-                if num_ports >= 20 and time_window < 300:  # 20+ ports in 5 minutes
+                # STRICTER Port scan detection thresholds
+                # Must scan UNUSUAL ports (not 80/443/53)
+                unusual_ports = [p for p in scan_data['ports'] if p not in LEGITIMATE_PORTS]
+                num_unusual_ports = len(unusual_ports)
+                
+                # Only flag if:
+                # 1. 15+ UNUSUAL ports scanned
+                # 2. Within 5 minutes
+                # 3. From local network (not external)
+                if (num_unusual_ports >= 15 and 
+                    time_window < 300 and
+                    src_ip.startswith(local_network_prefix)):
+                    
                     # PORT SCAN DETECTED!
                     alert = {
                         'type': 'port_scan',
                         'severity': 'HIGH',
                         'source_ip': src_ip,
                         'target_ips': list(scan_data['targets']),
-                        'ports_scanned': list(scan_data['ports']),
-                        'port_count': num_ports,
+                        'ports_scanned': unusual_ports,
+                        'port_count': num_unusual_ports,
                         'syn_count': scan_data['syn_packets'],
                         'duration': time_window,
                         'timestamp': timestamp,
-                        'description': f'Port scan detected: {src_ip} scanned {num_ports} ports on {num_targets} target(s)'
+                        'description': f'Port scan detected: {src_ip} scanned {num_unusual_ports} unusual ports on {num_targets} target(s)'
                     }
                     
                     # Check if we already alerted for this scan
@@ -303,7 +493,7 @@ class ScapyNetworkMonitor:
                         logger.warning(f"🚨 [PORT SCAN DETECTED]")
                         logger.warning(f"   Source: {src_ip}")
                         logger.warning(f"   Targets: {list(scan_data['targets'])}")
-                        logger.warning(f"   Ports: {num_ports} ports scanned")
+                        logger.warning(f"   Unusual Ports: {num_unusual_ports} ports scanned")
                         logger.warning(f"   Duration: {time_window:.1f} seconds")
                         logger.warning(f"   Risk Score: HIGH")
                         
@@ -315,9 +505,9 @@ class ScapyNetworkMonitor:
                             'timestamp': timestamp,
                             'source_ip': src_ip,
                             'threat_type': 'port_scan',
-                            'recon_score': min(100, num_ports * 2),
+                            'recon_score': min(100, num_unusual_ports * 3),
                             'indicators': [
-                                f"Port scanning ({num_ports} ports)",
+                                f"Port scanning ({num_unusual_ports} unusual ports)",
                                 f"Multiple targets ({num_targets} hosts)",
                                 f"Rapid scanning ({time_window:.1f}s)"
                             ],
@@ -343,6 +533,59 @@ class ScapyNetworkMonitor:
         except Exception as e:
             logger.error(f"Error processing TCP packet: {e}")
     
+    def _handle_dns_packet(self, packet):
+        """Process DNS packet - detect DNS anomalies"""
+        try:
+            if not packet.haslayer(DNS) or not packet.haslayer(IP):
+                return
+            
+            dns = packet[DNS]
+            ip = packet[IP]
+            
+            # Only process DNS queries (not responses)
+            if dns.qr != 0:  # qr=0 means query, qr=1 means response
+                return
+            
+            src_ip = ip.src
+            timestamp = time.time()
+            
+            # Process each DNS question
+            if dns.qd:  # Query section exists
+                for i in range(dns.qdcount):
+                    try:
+                        query = dns.qd[i] if isinstance(dns.qd, list) else dns.qd
+                        
+                        # Extract domain name
+                        domain = query.qname.decode('utf-8', errors='ignore') if isinstance(query.qname, bytes) else str(query.qname)
+                        domain = domain.strip('.')
+                        
+                        # Extract query type
+                        qtype_num = query.qtype
+                        qtype_map = {
+                            1: 'A', 2: 'NS', 5: 'CNAME', 6: 'SOA',
+                            12: 'PTR', 15: 'MX', 16: 'TXT', 28: 'AAAA',
+                            33: 'SRV', 255: 'ANY'
+                        }
+                        qtype = qtype_map.get(qtype_num, f'TYPE{qtype_num}')
+                        
+                        # Track DNS query
+                        if DNS_ANOMALY_DETECTION_ENABLED:
+                            dns_anomaly_detector.track_dns_query(
+                                src_ip=src_ip,
+                                domain=domain,
+                                qtype=qtype,
+                                timestamp=timestamp
+                            )
+                        
+                        logger.debug(f"🔍 [DNS] {src_ip} → {domain} ({qtype})")
+                    
+                    except Exception as e:
+                        logger.debug(f"Error parsing DNS query: {e}")
+                        continue
+        
+        except Exception as e:
+            logger.error(f"Error processing DNS packet: {e}")
+    
     def _packet_handler(self, packet):
         """Main packet handler"""
         self.stats['packets_processed'] += 1
@@ -351,9 +594,17 @@ class ScapyNetworkMonitor:
         if packet.haslayer(ARP):
             self._handle_arp_packet(packet)
         
-        # Process TCP packets (PORT SCAN DETECTION)
+        # Process TCP packets (PORT SCAN + BRUTE FORCE DETECTION)
         if packet.haslayer(TCP):
             self._handle_tcp_packet(packet)
+        
+        # Process UDP packets (for DNS)
+        if packet.haslayer(UDP):
+            self.stats['udp_packets'] += 1
+            
+            # Process DNS packets
+            if packet.haslayer(DNS):
+                self._handle_dns_packet(packet)
         
         # Process WiFi packets
         if packet.haslayer(Dot11):
@@ -369,11 +620,11 @@ class ScapyNetworkMonitor:
         self.stats['started_at'] = time.time()
         
         try:
-            # Sniff ARP and TCP packets
-            # Filter: capture ARP packets OR TCP SYN packets (port scans)
+            # Sniff ARP, TCP, UDP (DNS), and WiFi packets
+            # Filter: capture ARP packets OR TCP SYN packets OR UDP port 53 (DNS)
             sniff(
                 iface=self.interface,
-                filter="arp or (tcp[tcpflags] & tcp-syn != 0)",
+                filter="arp or (tcp[tcpflags] & tcp-syn != 0) or (udp port 53)",
                 prn=self._packet_handler,
                 store=False,
                 stop_filter=lambda x: not self.running
@@ -427,8 +678,32 @@ class ScapyNetworkMonitor:
         return devices
     
     def get_alerts(self) -> List[Dict[str, Any]]:
-        """Get all detected attacks/alerts"""
-        return self.arp_spoof_alerts + self.port_scan_alerts
+        """Get all detected attacks/alerts including brute force and DNS anomalies"""
+        alerts = self.arp_spoof_alerts + self.port_scan_alerts
+        
+        # Add brute force alerts if available
+        if BRUTE_FORCE_DETECTION_ENABLED:
+            brute_force_alerts = brute_force_detector.get_alerts()
+            alerts.extend(brute_force_alerts)
+        
+        # Add DNS anomaly alerts if available
+        if DNS_ANOMALY_DETECTION_ENABLED:
+            dns_alerts = dns_anomaly_detector.get_alerts()
+            alerts.extend(dns_alerts)
+        
+        return alerts
+    
+    def get_brute_force_stats(self) -> Dict[str, Any]:
+        """Get brute force detection statistics"""
+        if BRUTE_FORCE_DETECTION_ENABLED:
+            return brute_force_detector.get_stats()
+        return {}
+    
+    def get_dns_anomaly_stats(self) -> Dict[str, Any]:
+        """Get DNS anomaly detection statistics"""
+        if DNS_ANOMALY_DETECTION_ENABLED:
+            return dns_anomaly_detector.get_stats()
+        return {}
     
     def get_stats(self) -> Dict[str, Any]:
         """Get monitoring statistics"""

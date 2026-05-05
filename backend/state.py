@@ -6,6 +6,9 @@ from .config import settings
 # EMPTY STATE - NO FAKE DATA
 alerts: List[Dict[str, Any]] = []           # existing alerts (newest first)
 
+# Device history for reconnaissance detection
+device_history: Dict[str, List] = {}  # device_id -> list of (timestamp, event_type, data) tuples
+
 # Reconnaissance detection data (for proactive scanning)
 reconnaissance_data: Dict[str, Dict[str, Any]] = {}  # EMPTY - no fake recon data
 reconnaissance_findings: List[Dict[str, Any]] = []   # EMPTY - no fake findings

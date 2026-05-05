@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     # SECURITY
     # ============================================================================
     # Enforcement mode
-    safe_mode: bool = True  # true = simulate, false = real enforcement
-    gateway_mode: bool = False  # true = act as network gateway
+    safe_mode: bool = False  # false = attempt real enforcement (requires admin/root)
+    gateway_mode: bool = True  # true = backend acts as network gateway
     
     # API Security
     api_key_enabled: bool = False

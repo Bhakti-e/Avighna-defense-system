@@ -161,16 +161,17 @@ def ping_device(ip: str) -> dict:
 
 
 @router.post("/register")
-def register_manual_device(device: ManualDeviceCreate, db: Session = Depends(get_db)):
+def register_manual_device(device: ManualDeviceCreate, force: bool = False, db: Session = Depends(get_db)):
     """
-    Register a device manually with STRICT verification
+    Register a device manually with optional verification
     
-    Verification steps:
+    Verification steps (if force=False):
     1. Check ARP table for MAC address
     2. Determine IP (prefer ARP-verified over user-provided)
-    3. PING device to verify it's online
+    3. PING device to verify it's online (OPTIONAL - can be skipped with force=True)
     4. Verify MAC-IP binding matches
-    5. Only register if all checks pass
+    
+    If force=True: Skip ping check, register anyway (for offline/sleeping devices)
     """
     # Check if device already exists
     existing = db.query(models.Device).filter(
@@ -204,15 +205,30 @@ def register_manual_device(device: ManualDeviceCreate, db: Session = Depends(get
             detail="Device not found in ARP table. Please provide IP address or ensure device is connected to the network."
         )
     
-    # STEP 3: PING VERIFICATION (CRITICAL - prevents fake registrations)
-    ping_result = ping_device(final_ip)
-    if not ping_result['online']:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Device not responding to ping: {ping_result['message']}. Cannot register offline or non-existent device."
-        )
+    # STEP 3: PING VERIFICATION (OPTIONAL - can be skipped)
+    ping_verified = False
+    ping_message = "Ping check skipped (force registration)"
+    response_time_ms = None
+    device_status = "OFFLINE"  # Default for force registration
     
-    # STEP 4: Create device record (only if all checks pass)
+    if not force:
+        ping_result = ping_device(final_ip)
+        ping_verified = ping_result['online']
+        ping_message = ping_result['message']
+        response_time_ms = ping_result.get('response_time_ms')
+        
+        if not ping_verified:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Device not responding to ping: {ping_message}. Use force=True query parameter to register anyway (for sleeping/offline devices)."
+            )
+        device_status = "ACTIVE"
+    else:
+        # Force registration - mark as offline but allow registration
+        device_status = "OFFLINE"
+        ping_message = "Device registered without ping verification (may be sleeping/offline)"
+    
+    # STEP 4: Create device record
     now = datetime.utcnow()
     new_device = models.Device(
         device_id=device.mac_address,
@@ -221,7 +237,7 @@ def register_manual_device(device: ManualDeviceCreate, db: Session = Depends(get
         hostname=device.nickname,
         vendor="Unknown",  # Will be looked up by device manager
         source="manual",
-        status="ACTIVE",  # Verified online via ping
+        status=device_status,
         risk_score=0.0,
         risk_level="GREEN",
         first_seen=now,
@@ -235,7 +251,7 @@ def register_manual_device(device: ManualDeviceCreate, db: Session = Depends(get
     
     return {
         "success": True,
-        "message": "Device registered successfully with verification",
+        "message": "Device registered successfully" + (" (forced - no ping verification)" if force else " with verification"),
         "device": {
             "device_id": new_device.device_id,
             "nickname": device.nickname,
@@ -245,9 +261,10 @@ def register_manual_device(device: ManualDeviceCreate, db: Session = Depends(get
             "status": new_device.status,
             "verification": {
                 "arp_verified": network_check.get('exists'),
-                "ping_verified": ping_result['online'],
-                "response_time_ms": ping_result.get('response_time_ms'),
-                "message": "Device verified online and reachable"
+                "ping_verified": ping_verified,
+                "response_time_ms": response_time_ms,
+                "message": ping_message,
+                "forced_registration": force
             }
         }
     }

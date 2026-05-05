@@ -8,6 +8,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 import os
 import logging
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 

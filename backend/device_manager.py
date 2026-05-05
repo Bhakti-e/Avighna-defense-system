@@ -74,7 +74,7 @@ class DeviceManager:
         Returns: router, phone, laptop, tablet, iot, server, unknown
         """
         # Check if router (common gateway IPs)
-        if ip.endswith('.1') or ip.endswith('.254'):
+        if ip and (ip.endswith('.1') or ip.endswith('.254')):
             return "router"
         
         # Check hostname for clues
@@ -82,7 +82,7 @@ class DeviceManager:
             hostname_lower = hostname.lower()
             
             # Phone detection
-            if any(x in hostname_lower for x in ['iphone', 'android', 'phone', 'mobile', 'galaxy', 'pixel']):
+            if any(x in hostname_lower for x in ['iphone', 'android', 'phone', 'mobile', 'galaxy', 'pixel', 'oppo', 'vivo', 'xiaomi']):
                 return "phone"
             
             # Tablet detection
@@ -90,7 +90,7 @@ class DeviceManager:
                 return "tablet"
             
             # Laptop/Desktop detection
-            if any(x in hostname_lower for x in ['laptop', 'desktop', 'pc', 'macbook', 'thinkpad']):
+            if any(x in hostname_lower for x in ['laptop', 'desktop', 'pc', 'macbook', 'thinkpad', 'dell', 'hp', 'lenovo']):
                 return "laptop"
             
             # Server detection
@@ -102,18 +102,64 @@ class DeviceManager:
             vendor_lower = vendor.lower()
             
             # Phone vendors
-            if any(x in vendor_lower for x in ['apple', 'samsung', 'xiaomi', 'huawei', 'oppo', 'vivo', 'oneplus']):
+            if any(x in vendor_lower for x in ['apple', 'samsung', 'xiaomi', 'huawei', 'oppo', 'vivo', 'oneplus', 'motorola', 'lg', 'sony']):
                 return "phone"
             
             # Router vendors
-            if any(x in vendor_lower for x in ['tp-link', 'netgear', 'linksys', 'asus', 'd-link', 'cisco']):
+            if any(x in vendor_lower for x in ['tp-link', 'netgear', 'linksys', 'asus', 'd-link', 'cisco', 'ubiquiti']):
                 return "router"
             
+            # Laptop vendors
+            if any(x in vendor_lower for x in ['dell', 'hp', 'lenovo', 'acer', 'asus', 'msi', 'microsoft']):
+                return "laptop"
+            
             # IoT vendors
-            if any(x in vendor_lower for x in ['raspberry', 'arduino', 'espressif', 'tuya']):
+            if any(x in vendor_lower for x in ['raspberry', 'arduino', 'espressif', 'tuya', 'philips hue', 'nest']):
                 return "iot"
         
         return "unknown"
+    
+    def _is_randomized_mac(self, mac: str) -> bool:
+        """
+        Detect if MAC address is randomized (privacy feature)
+        Randomized MACs have locally administered bit set
+        """
+        if not mac or len(mac) < 2:
+            return False
+        
+        # Get second character (first octet, second hex digit)
+        clean_mac = mac.replace(':', '').replace('-', '')
+        if len(clean_mac) < 2:
+            return False
+        
+        second_char = clean_mac[1].upper()
+        
+        # Check if locally administered bit is set
+        return second_char in ['2', '3', '6', '7', 'A', 'B', 'E', 'F']
+    
+    def _compute_confidence_score(self, mac: str, hostname: Optional[str], vendor: str, source: str) -> str:
+        """
+        Compute confidence score for device identification
+        Returns: high, medium, low
+        """
+        # High confidence: Router source + hostname + vendor
+        if source == "router" and hostname and vendor != "Unknown":
+            return "high"
+        
+        # High confidence: Non-randomized MAC + hostname + vendor
+        if not self._is_randomized_mac(mac) and hostname and vendor != "Unknown":
+            return "high"
+        
+        # Medium confidence: Non-randomized MAC + (hostname OR vendor)
+        if not self._is_randomized_mac(mac) and (hostname or vendor != "Unknown"):
+            return "medium"
+        
+        # Medium confidence: Randomized MAC + hostname
+        if self._is_randomized_mac(mac) and hostname:
+            return "medium"
+        
+        # Low confidence: Everything else
+        return "low"
     
     def _compute_device_status(self, last_seen: datetime) -> str:
         """
@@ -146,8 +192,7 @@ class DeviceManager:
     ) -> Optional[models.Device]:
         """
         Register or update a device in database
-        Uses MAC as primary identity, IP as fallback
-        Returns Device object or None if excluded
+        IMPROVED: Handles randomized MACs, confidence scoring, intelligent deduplication
         
         device_name: Device name from router (PRIMARY - most accurate)
         hostname: Hostname from network discovery
@@ -163,8 +208,17 @@ class DeviceManager:
             logger.debug(f"Skipping invalid MAC: {mac}")
             return None
         
-        # Device ID is MAC (primary) or IP (fallback)
-        device_id = mac if mac != "unknown" else ip
+        # Check if randomized MAC
+        is_random_mac = self._is_randomized_mac(mac)
+        
+        # Device ID strategy:
+        # - Non-randomized MAC: Use MAC as device_id (stable)
+        # - Randomized MAC: Use IP as device_id (changes frequently)
+        if is_random_mac:
+            device_id = f"random-{ip}"  # Prefix to indicate randomized MAC
+            logger.debug(f"Detected randomized MAC: {mac} at {ip}")
+        else:
+            device_id = mac
         
         # Lookup vendor from IEEE OUI database if not provided
         if not vendor or vendor == "Unknown":
@@ -173,6 +227,13 @@ class DeviceManager:
         # Determine best device name
         # Priority: device_name (from router) > hostname > vendor
         best_name = device_name or hostname or vendor
+        
+        # Handle randomized MAC naming
+        if is_random_mac and not device_name:
+            best_name = f"Private MAC Device"
+        
+        # Compute confidence score
+        confidence = self._compute_confidence_score(mac, hostname, vendor, source)
         
         db = SessionLocal()
         try:
@@ -187,12 +248,15 @@ class DeviceManager:
                 # Update existing device
                 device.last_seen = now
                 device.ip_address = ip
+                device.mac_address = mac  # Update MAC (may change for randomized MACs)
                 
                 # Update name if we have better information
                 if device_name:
                     device.hostname = device_name
                 elif hostname and not device.hostname:
                     device.hostname = hostname
+                elif is_random_mac and not device.hostname:
+                    device.hostname = best_name
                 
                 if vendor and vendor != "Unknown":
                     device.vendor = vendor
@@ -202,7 +266,7 @@ class DeviceManager:
                 
                 db.commit()
                 db.refresh(device)
-                logger.debug(f"Updated device: {device_id} ({ip}) - Status: {device.status}")
+                logger.debug(f"Updated device: {device_id} ({ip}) - Status: {device.status} - Confidence: {confidence}")
             else:
                 # Classify device type
                 device_type = self._classify_device_type(ip, mac, best_name, vendor)
@@ -228,7 +292,8 @@ class DeviceManager:
                 
                 # Display name priority: device_name > hostname > vendor > device_type > IP
                 display_name = best_name or device_type.title() or ip
-                logger.info(f"NEW DEVICE: {display_name} ({ip} / {mac}) - Type: {device_type} - Source: {source}")
+                mac_label = f"(randomized)" if is_random_mac else f"({mac})"
+                logger.info(f"NEW DEVICE: {display_name} {mac_label} at {ip} - Type: {device_type} - Confidence: {confidence} - Source: {source}")
             
             return device
             
@@ -305,6 +370,7 @@ class DeviceManager:
         """
         Get all devices from database as dictionaries
         By default excludes OFFLINE devices
+        IMPROVED: Includes confidence scoring and randomized MAC detection
         """
         db = SessionLocal()
         try:
@@ -326,6 +392,17 @@ class DeviceManager:
                     device.vendor
                 )
                 
+                # Check if randomized MAC
+                is_random_mac = self._is_randomized_mac(device.mac_address)
+                
+                # Compute confidence
+                confidence = self._compute_confidence_score(
+                    device.mac_address,
+                    device.hostname,
+                    device.vendor,
+                    device.source
+                )
+                
                 device_dicts.append({
                     'id': device.id,
                     'device_id': device.device_id,
@@ -341,7 +418,9 @@ class DeviceManager:
                     'first_seen': device.first_seen,
                     'last_seen': device.last_seen,
                     'quarantined': device.quarantined,
-                    'baseline_profile': device.baseline_profile
+                    'baseline_profile': device.baseline_profile,
+                    'is_randomized_mac': is_random_mac,
+                    'confidence': confidence
                 })
             
             return device_dicts

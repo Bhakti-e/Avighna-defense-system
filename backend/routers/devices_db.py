@@ -12,12 +12,13 @@ router = APIRouter()
 
 @router.get("/")
 def list_devices(
-    include_offline: bool = Query(False, description="Include OFFLINE devices"),
+    include_offline: bool = Query(True, description="Include OFFLINE devices"),
     db: Session = Depends(get_db)
 ):
     """
     Return unified device list from device manager
     Shows single accurate list - no separate "registered" vs "discovered"
+    DEFAULT: Shows ALL devices including OFFLINE (changed from False to True)
     """
     from ..device_manager import device_manager
     
