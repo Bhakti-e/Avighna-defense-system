@@ -142,7 +142,8 @@ def compute_risk(payload: Dict[str, Any],
         "ml_score": round(ml_score, 2),
         "forensics_score": round(forensics_contribution, 2),
         "rule_score": round(rule_score, 2),
-        "telemetry_health_score": telemetry_health_score or 100.0,
+        # Preserve lost (0) and unknown (None) health; neither means healthy.
+        "telemetry_health_score": telemetry_health_score,
         "telemetry_penalty": round(telemetry_penalty, 2),
         "enterprise_mode": True
     }
