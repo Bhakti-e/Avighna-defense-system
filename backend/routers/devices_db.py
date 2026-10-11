@@ -5,7 +5,7 @@ Devices router with DATABASE integration
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..db_utils import get_all_devices, compute_telemetry_health
+from ..db_utils import get_all_devices, compute_telemetry_health, evaluate_visibility
 
 router = APIRouter()
 
@@ -22,6 +22,8 @@ def list_devices(
     """
     from ..device_manager import device_manager
     
+    # Local reconciliation only; no scans or background collection.
+    evaluate_visibility(db)
     devices = device_manager.get_all_devices(include_offline=include_offline)
     
     device_list = []
@@ -51,6 +53,9 @@ def list_devices(
             "last_network_seen": device["last_network_seen"],
             "last_agent_heartbeat": device["last_agent_heartbeat"],
             "last_endpoint_event": device["last_endpoint_event"],
+            "network_status": ("UNKNOWN" if device["last_network_seen"] is None else
+                ("RECENTLY_OBSERVED" if device_manager._compute_device_status(device["last_network_seen"]) == "ACTIVE"
+                 else "NOT_RECENTLY_OBSERVED")),
             "agent_status": {"ACTIVE": "HEALTHY", "LOST": "OFFLINE"}.get(telemetry_status, telemetry_status),
             "telemetry_health_score": telemetry_health_score,
             "telemetry_status": telemetry_status,

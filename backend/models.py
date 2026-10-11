@@ -42,6 +42,7 @@ class Device(Base):
     last_network_seen = Column(DateTime, nullable=True)
     last_agent_heartbeat = Column(DateTime, nullable=True)
     last_endpoint_event = Column(DateTime, nullable=True)
+    agent_health_state = Column(String(20), nullable=True)
     
     # Baseline profile - computed from telemetry_history after N samples, else NULL
     baseline_profile = Column(JSON, nullable=True)
@@ -83,6 +84,8 @@ class Alert(Base):
     # Foreign key to device
     device_id = Column(String(255), ForeignKey("devices.device_id"), nullable=False, index=True)
     
+    visibility_event_key = Column(String(512), nullable=True)
+
     # Alert metadata
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     
@@ -110,6 +113,7 @@ class Alert(Base):
     # Indexes
     __table_args__ = (
         Index('idx_alert_timestamp', 'timestamp'),
+        Index('idx_alert_visibility_event', 'visibility_event_key', unique=True),
         Index('idx_alert_device_time', 'device_id', 'timestamp'),
     )
 

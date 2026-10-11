@@ -40,8 +40,10 @@ def update_device_last_seen(db: Session, device_id: str) -> None:
     device = db.query(models.Device).filter(models.Device.device_id == device_id).first()
     if device:
         now = datetime.utcnow()
+        evaluate_device_visibility(db, device, now)  # Detect any gap before recovery.
         device.last_seen = now  # Legacy compatibility only.
         device.last_agent_heartbeat = now
+        evaluate_device_visibility(db, device, now)
         db.commit()
 
 
@@ -263,3 +265,54 @@ def set_device_under_observation(db: Session, device_id: str, observation_detail
         device.observation_details = observation_details
         device.status = "UNDER_OBSERVATION"
         db.commit()
+
+
+def evaluate_device_visibility(db: Session, device: models.Device, now=None):
+    """Persist one loss/recovery event per heartbeat episode; never assign threat risk."""
+    from sqlalchemy.exc import IntegrityError
+    now = now or datetime.utcnow()
+    _, state = compute_telemetry_health(device.last_agent_heartbeat, now)
+    previous = device.agent_health_state
+    kind = None
+    if state in {"STALE", "LOST"} and previous not in {"STALE", "LOST"}:
+        kind = "visibility_lost"
+    elif state == "ACTIVE" and previous in {"STALE", "LOST"}:
+        kind = "visibility_recovered"
+    if kind:
+        key = f"{kind}|{device.device_id}|{device.last_agent_heartbeat.isoformat()}"
+        if not db.query(models.Alert).filter(models.Alert.visibility_event_key == key).first():
+            reason = ("Visibility lost / possible agent impairment. Cause unknown; "
+                      "outage, misconfiguration, or tampering require investigation."
+                      if kind == "visibility_lost" else
+                      "Agent heartbeat resumed. Recovery does not establish device security.")
+            event = models.Alert(
+                device_id=device.device_id, timestamp=now, risk_score=0.0,
+                risk_level="UNKNOWN", detection_type="SensorHealth", severity=1,
+                response_action="NONE", reason=reason, visibility_event_key=key,
+                details_json={
+                    "kind": kind, "source": "agent-health", "rule": "heartbeat-gap-v1",
+                    "observed_at": now.isoformat() + "Z",
+                    "last_agent_heartbeat": device.last_agent_heartbeat.isoformat() + "Z",
+                    "state": state, "stale_after_seconds": 60, "offline_after_seconds": 180,
+                    "limitations": "Visibility only; not proof of compromise or recovery from compromise.",
+                },
+            )
+            try:
+                with db.begin_nested():
+                    db.add(event)
+                    db.flush()
+            except IntegrityError:
+                # The unique event key also deduplicates concurrent insert attempts.
+                if not db.query(models.Alert).filter(models.Alert.visibility_event_key == key).first():
+                    raise
+    if state != "UNKNOWN":
+        device.agent_health_state = state
+    return state
+
+
+def evaluate_visibility(db: Session, now=None):
+    """Reconcile on inventory reads. No scanner or autonomous worker is started."""
+    now = now or datetime.utcnow()
+    for device in db.query(models.Device).all():
+        evaluate_device_visibility(db, device, now)
+    db.commit()

@@ -95,3 +95,79 @@ def test_legacy_sqlite_migration_preserves_data_and_unknown_heartbeat(tmp_path):
         assert row["last_network_seen"] is None
         assert row["last_endpoint_event"] is None
     engine.dispose()
+
+
+def test_loss_offline_recovery_are_deduplicated_and_not_threat_verdicts(visibility_db):
+    from backend.models import Device, Alert
+    from backend.db_utils import evaluate_visibility, update_device_last_seen
+    db, factory = visibility_db
+    now = datetime.utcnow()
+    db.add(Device(device_id="gap", last_agent_heartbeat=now - timedelta(seconds=61),
+                  risk_score=75, risk_level="RED", status="UNDER_OBSERVATION"))
+    db.commit()
+    evaluate_visibility(db, now)
+    evaluate_visibility(db, now + timedelta(seconds=130))
+    evaluate_visibility(db, now + timedelta(seconds=140))
+    assert db.query(Alert).count() == 1
+    loss = db.query(Alert).one()
+    assert loss.details_json["kind"] == "visibility_lost"
+    assert loss.response_action == "NONE"
+    assert loss.risk_level == "UNKNOWN"
+    assert loss.details_json["last_agent_heartbeat"].endswith("Z")
+    # A new session must preserve episode deduplication.
+    with factory() as other:
+        evaluate_visibility(other, now + timedelta(seconds=150))
+        assert other.query(Alert).count() == 1
+    db.expire_all()
+    update_device_last_seen(db, "gap")
+    update_device_last_seen(db, "gap")
+    assert db.query(Alert).count() == 2
+    assert {a.details_json["kind"] for a in db.query(Alert)} == {
+        "visibility_lost", "visibility_recovered"}
+    device = db.query(Device).one()
+    assert (device.risk_score, device.risk_level, device.status) == (
+        75, "RED", "UNDER_OBSERVATION")
+
+def test_unknown_agent_has_no_invented_loss_event(visibility_db):
+    from backend.models import Device, Alert
+    from backend.db_utils import evaluate_visibility
+    db, _ = visibility_db
+    db.add(Device(device_id="unknown", last_network_seen=datetime.utcnow()))
+    db.commit()
+    evaluate_visibility(db)
+    assert db.query(Alert).count() == 0
+
+def test_inventory_api_exposes_independent_health_and_events(visibility_db):
+    from backend.models import Device, Alert
+    from backend.routers.devices_db import list_devices
+    db, factory = visibility_db
+    now = datetime.utcnow()
+    db.add(Device(device_id="api-fixture", last_network_seen=now,
+                  last_agent_heartbeat=now - timedelta(minutes=5)))
+    db.commit()
+    with patch("backend.device_manager.SessionLocal", factory):
+        first = list_devices(include_offline=True, db=db)[0]
+        list_devices(include_offline=True, db=db)
+    assert first["agent_status"] == "OFFLINE"
+    assert first["network_status"] == "RECENTLY_OBSERVED"
+    assert first["telemetry_health_score"] == 0
+    assert first["last_network_seen"] != first["last_agent_heartbeat"]
+    assert db.query(Alert).count() == 1
+
+def test_legacy_alert_migration_preserves_rows_and_adds_unique_event_key(tmp_path):
+    from backend.visibility_migration import migrate_visibility_columns
+    from sqlalchemy.exc import IntegrityError
+    engine = create_engine("sqlite:///" + (tmp_path / "legacy-alert.sqlite").as_posix())
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE devices (id INTEGER PRIMARY KEY)")
+        conn.exec_driver_sql("CREATE TABLE alerts (id INTEGER PRIMARY KEY, reason TEXT)")
+        conn.exec_driver_sql("INSERT INTO alerts VALUES (1, 'original evidence')")
+    migrate_visibility_columns(engine)
+    migrate_visibility_columns(engine)
+    with engine.begin() as conn:
+        assert conn.execute(text("SELECT reason FROM alerts WHERE id=1")).scalar() == "original evidence"
+        conn.exec_driver_sql("INSERT INTO alerts (id, visibility_event_key) VALUES (2, 'episode')")
+    with pytest.raises(IntegrityError):
+        with engine.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO alerts (id, visibility_event_key) VALUES (3, 'episode')")
+    engine.dispose()
