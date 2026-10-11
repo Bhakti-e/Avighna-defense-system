@@ -26,8 +26,8 @@ def list_devices(
     
     device_list = []
     for device in devices:
-        # Compute telemetry health in real-time from last_seen
-        telemetry_health_score, telemetry_status = compute_telemetry_health(device['last_seen'])
+        # Network observation never refreshes endpoint-agent health.
+        telemetry_health_score, telemetry_status = compute_telemetry_health(device['last_agent_heartbeat'])
         
         # Display name priority: hostname > vendor > device_type > "Unknown Device"
         display_name = device['hostname'] or device['vendor']
@@ -48,6 +48,10 @@ def list_devices(
             "hostname": device['hostname'],
             "vendor": device['vendor'],
             "source": device['source'],
+            "last_network_seen": device["last_network_seen"],
+            "last_agent_heartbeat": device["last_agent_heartbeat"],
+            "last_endpoint_event": device["last_endpoint_event"],
+            "agent_status": {"ACTIVE": "HEALTHY", "LOST": "OFFLINE"}.get(telemetry_status, telemetry_status),
             "telemetry_health_score": telemetry_health_score,
             "telemetry_status": telemetry_status,
         })

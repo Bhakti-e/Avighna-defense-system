@@ -74,6 +74,8 @@ def init_db():
     """
     try:
         Base.metadata.create_all(bind=engine)
+        from .visibility_migration import migrate_visibility_columns
+        migrate_visibility_columns(engine)
         logger.info("Database tables created successfully")
     except Exception as e:
         logger.error(f"Failed to create database tables: {e}")

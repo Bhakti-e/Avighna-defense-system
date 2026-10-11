@@ -3,7 +3,7 @@ Database utility functions for DOME/AVIGHNA
 Helper functions for common DB operations
 """
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 import time
 from . import models
@@ -39,7 +39,9 @@ def update_device_last_seen(db: Session, device_id: str) -> None:
     """
     device = db.query(models.Device).filter(models.Device.device_id == device_id).first()
     if device:
-        device.last_seen = datetime.utcnow()
+        now = datetime.utcnow()
+        device.last_seen = now  # Legacy compatibility only.
+        device.last_agent_heartbeat = now
         db.commit()
 
 
@@ -56,18 +58,23 @@ def update_device_risk(db: Session, device_id: str, risk_score: float, risk_leve
         db.commit()
 
 
-def compute_telemetry_health(last_seen: datetime) -> tuple[float, str]:
+def compute_telemetry_health(last_agent_heartbeat: datetime, now=None) -> tuple[Optional[float], str]:
     """
-    Compute telemetry health score from last_seen timestamp
+    Compute telemetry health only from the endpoint-agent heartbeat.
     Returns (score 0-100, status string)
     
     OPTION A: Compute at read-time (preferred - no fake data)
     """
-    if not last_seen:
-        return 0.0, "UNKNOWN"
-    
-    now = datetime.utcnow()
-    time_since_last = (now - last_seen).total_seconds()
+    if not last_agent_heartbeat:
+        return None, "UNKNOWN"
+    now = now or datetime.utcnow()
+    if now.tzinfo is not None:
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
+    if last_agent_heartbeat.tzinfo is not None:
+        last_agent_heartbeat = last_agent_heartbeat.astimezone(timezone.utc).replace(tzinfo=None)
+    time_since_last = (now - last_agent_heartbeat).total_seconds()
+    if time_since_last < 0:
+        return None, "UNKNOWN"  # Future observations need clock/source investigation.
     
     TELEMETRY_TIMEOUT = 60  # seconds - stale threshold
     TELEMETRY_LOST_TIMEOUT = 180  # seconds - lost threshold
@@ -183,6 +190,9 @@ def create_telemetry_record(db: Session, device_id: str, payload: Dict[str, Any]
         raw_payload=payload
     )
     db.add(telemetry)
+    device = db.query(models.Device).filter(models.Device.device_id == device_id).first()
+    if device:
+        device.last_endpoint_event = telemetry.timestamp
     db.commit()
     db.refresh(telemetry)
     return telemetry

@@ -38,6 +38,10 @@ class Device(Base):
     # Timestamps - real only
     first_seen = Column(DateTime, nullable=False, default=datetime.utcnow)
     last_seen = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    # Independent observations; legacy last_seen has ambiguous provenance.
+    last_network_seen = Column(DateTime, nullable=True)
+    last_agent_heartbeat = Column(DateTime, nullable=True)
+    last_endpoint_event = Column(DateTime, nullable=True)
     
     # Baseline profile - computed from telemetry_history after N samples, else NULL
     baseline_profile = Column(JSON, nullable=True)

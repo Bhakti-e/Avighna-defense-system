@@ -433,7 +433,7 @@ def ingest(payload: TelemetryIn, db: Session = Depends(get_db)):
     # STEP 9: RISK COMPUTATION
     # Compute telemetry health from last_seen (real-time computation)
     from ..db_utils import compute_telemetry_health
-    telemetry_health_score, telemetry_status = compute_telemetry_health(device.last_seen)
+    telemetry_health_score, telemetry_status = compute_telemetry_health(device.last_agent_heartbeat)
     
     risk = compute_risk(
         payload.model_dump(), 

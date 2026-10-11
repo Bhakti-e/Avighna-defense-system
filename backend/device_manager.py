@@ -249,6 +249,7 @@ class DeviceManager:
             if device:
                 # Update existing device
                 device.last_seen = now
+                device.last_network_seen = now
                 device.ip_address = ip
                 device.mac_address = mac  # Update MAC (may change for randomized MACs)
                 
@@ -286,6 +287,7 @@ class DeviceManager:
                     risk_level="GREEN",
                     first_seen=now,
                     last_seen=now,
+                    last_network_seen=now,
                     quarantined=0
                 )
                 db.add(device)
@@ -326,6 +328,7 @@ class DeviceManager:
             if device:
                 # Update existing device
                 device.last_seen = datetime.utcnow()
+                device.last_network_seen = device.last_seen
                 device.status = "ACTIVE"
                 db.commit()
                 logger.debug(f"Traffic update: {device_id} ({ip}) - {packet_count} packets")
@@ -419,6 +422,9 @@ class DeviceManager:
                     'risk_level': device.risk_level,
                     'first_seen': device.first_seen,
                     'last_seen': device.last_seen,
+                    'last_network_seen': device.last_network_seen,
+                    'last_agent_heartbeat': device.last_agent_heartbeat,
+                    'last_endpoint_event': device.last_endpoint_event,
                     'quarantined': device.quarantined,
                     'baseline_profile': device.baseline_profile,
                     'is_randomized_mac': is_random_mac,
