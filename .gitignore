@@ -66,6 +66,8 @@ data/
 check_db.py
 test_*.py
 *_test.py
+# Keep the offline health-reporting regression suite versionable.
+!tests/test_risk_scoring.py
 
 # Windows
 *.bat
@@ -74,3 +76,17 @@ Thumbs.db
 # ML Models (optional - keep if you want to share trained models)
 # *.h5
 # *.joblib
+
+# Isolated Stage 1 environment and tracked offline tests
+.venv-offline/
+.pytest_cache/
+!tests/offline/
+!tests/offline/*.py
+
+# Local secrets, certificates, and generated preview data
+.env.auth
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx

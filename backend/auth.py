@@ -14,7 +14,8 @@ from .database import get_db
 import os
 
 # Security configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "avighna-defense-secret-key-change-in-production")
+from .secret_config import load_secret_key
+SECRET_KEY = load_secret_key()
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8 hours
 
