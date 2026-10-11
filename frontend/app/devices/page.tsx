@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
 import { Activity, AlertCircle } from "lucide-react";
@@ -31,8 +32,8 @@ export default function DevicesPage() {
 
   const fetchDevices = async () => {
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL;
-      const devicesRes = await fetch(`${API_URL}/devices/`);
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const devicesRes = await apiFetch(`${API_URL}/devices/`);
       const devicesData = await devicesRes.json();
       setDevices(devicesData || []);
     } catch (error) {

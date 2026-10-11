@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch, API_URL } from "@/lib/api";
 
 import { useState, useEffect } from "react";
 import { FileText, Download, Calendar, AlertTriangle } from "lucide-react";
@@ -23,7 +24,7 @@ export default function ReportsPage() {
 
   const fetchReports = async () => {
     try {
-      const response = await fetch("http://localhost:8000/reports/list");
+      const response = await apiFetch(API_URL + "/reports/list");
       if (response.ok) {
         const data = await response.json();
         setReports(data.reports || []);
@@ -37,7 +38,7 @@ export default function ReportsPage() {
 
   const downloadReport = async (reportId: number, filename: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/reports/download/${reportId}`);
+      const response = await apiFetch(`${API_URL}/reports/download/${reportId}`);
       if (response.ok) {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
@@ -62,7 +63,7 @@ export default function ReportsPage() {
     if (!mac) return;
 
     try {
-      const response = await fetch("http://localhost:8000/reports/generate", {
+      const response = await apiFetch(API_URL + "/reports/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device_mac: mac }),

@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
 import { Bell, AlertTriangle } from "lucide-react";
@@ -25,8 +26,8 @@ export default function AlertsPage() {
 
   const fetchAlerts = async () => {
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const res = await fetch(`${API_URL}/alerts/`);
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await apiFetch(`${API_URL}/alerts/`);
       const data = await res.json();
       
       // Ensure data is an array

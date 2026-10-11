@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch } from "@/lib/api";
 
 import { useState } from "react";
 import { Plus, Wifi, WifiOff, Loader2 } from "lucide-react";
@@ -57,13 +58,13 @@ export default function RegisterDevicePage() {
     setMessage(null);
 
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL;
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
       const params = new URLSearchParams({
         mac_address: macAddress,
         ...(ipAddress && { ip_address: ipAddress }),
       });
 
-      const response = await fetch(`${API_URL}/manual-devices/check-connectivity?${params}`, {
+      const response = await apiFetch(`${API_URL}/manual-devices/check-connectivity?${params}`, {
         method: "POST",
       });
 
@@ -97,8 +98,8 @@ export default function RegisterDevicePage() {
     setMessage(null);
 
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL;
-      const response = await fetch(`${API_URL}/manual-devices/register`, {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const response = await apiFetch(`${API_URL}/manual-devices/register`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
 import { Bell, Shield, AlertTriangle, ChevronDown, User, Settings, LogOut } from "lucide-react";
@@ -28,10 +29,10 @@ export default function Topbar() {
 
   const fetchStats = async () => {
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
       const [devicesRes, alertsRes] = await Promise.all([
-        fetch(`${API_URL}/devices/`),
-        fetch(`${API_URL}/alerts/`),
+        apiFetch(`${API_URL}/devices/`),
+        apiFetch(`${API_URL}/alerts/`),
       ]);
       
       if (!devicesRes.ok || !alertsRes.ok) {
@@ -44,7 +45,7 @@ export default function Topbar() {
       
       setStats({
         devices: Array.isArray(devices) ? devices.length : 0,
-        alerts: alertsData.count || alertsData.alerts?.length || 0,
+        alerts: Array.isArray(alertsData) ? alertsData.length : alertsData.count || alertsData.alerts?.length || 0,
       });
     } catch (error) {
       console.error("Failed to fetch topbar stats:", error);
@@ -53,15 +54,10 @@ export default function Topbar() {
 
   const fetchNotifications = async () => {
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const [alertsRes, reconRes] = await Promise.all([
-        fetch(`${API_URL}/alerts/`),
-        fetch(`${API_URL}/reconnaissance/findings`),
-      ]);
-      
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const alertsRes = await apiFetch(API_URL + "/alerts/");
       const alerts = await alertsRes.json();
-      const recon = await reconRes.json();
-      
+
       const notifs: any[] = [];
       
       // Add alerts
@@ -72,18 +68,6 @@ export default function Topbar() {
             title: alert.reason || "Security Alert",
             time: new Date(alert.timestamp).toLocaleTimeString(),
             severity: alert.severity
-          });
-        });
-      }
-      
-      // Add recon events
-      if (Array.isArray(recon)) {
-        recon.slice(0, 3).forEach((event: any) => {
-          notifs.push({
-            type: "recon",
-            title: `Port scan detected: ${event.source_ip}`,
-            time: new Date(event.timestamp).toLocaleTimeString(),
-            severity: 3
           });
         });
       }

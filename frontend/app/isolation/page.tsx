@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
 import { Shield, Download, AlertTriangle } from "lucide-react";
@@ -30,8 +31,8 @@ export default function IsolationPage() {
 
   const fetchIsolatedDevices = async () => {
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL;
-      const res = await fetch(`${API_URL}/reports/isolation/details`);
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await apiFetch(`${API_URL}/reports-db/isolation/details`);
       const data = await res.json();
       setDevices(data.isolated_devices || []);
     } catch (error) {

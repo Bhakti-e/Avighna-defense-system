@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
 import DashboardCard from "@/components/DashboardCard";
@@ -31,9 +32,6 @@ export default function Dashboard() {
   });
   
   const [threatIntel, setThreatIntel] = useState<ThreatIntel[]>([]);
-  const [command, setCommand] = useState("");
-  const [commandOutput, setCommandOutput] = useState<string[]>([]);
-  const [commandRunning, setCommandRunning] = useState(false);
 
   useEffect(() => {
     fetchStats();
@@ -46,10 +44,10 @@ export default function Dashboard() {
   }, []);
 
   const fetchStats = async () => {
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     
     try {
-      const res = await fetch(`${API_URL}/stats/dashboard`);
+      const res = await apiFetch(`${API_URL}/stats/dashboard`);
       const data = await res.json();
 
       setStats({
@@ -90,80 +88,6 @@ export default function Dashboard() {
       }
     ]);
   };
-
-  const allowedCommands = ["ping", "tracert", "nslookup", "nmap", "arp", "netstat"];
-
-  const runCommand = async () => {
-    const cmd = command.trim();
-    if (!cmd) return;
-
-    const cmdName = cmd.split(" ")[0].toLowerCase();
-    
-    if (!allowedCommands.includes(cmdName)) {
-      setCommandOutput(prev => [
-        ...prev,
-        `$ ${cmd}`,
-        `ERROR: Command '${cmdName}' is not allowed.`,
-        `Allowed commands: ${allowedCommands.join(", ")}`,
-        ""
-      ]);
-      setCommand("");
-      return;
-    }
-
-    setCommandRunning(true);
-    setCommandOutput(prev => [...prev, `$ ${cmd}`, "Running command..."]);
-
-    try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const response = await fetch(`${API_URL}/investigation/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: cmd })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setCommandOutput(prev => [
-          ...prev.slice(0, -1),
-          data.output || "Command completed successfully",
-          ""
-        ]);
-      } else {
-        setCommandOutput(prev => [
-          ...prev.slice(0, -1),
-          "ERROR: Command execution failed",
-          ""
-        ]);
-      }
-    } catch (error) {
-      setCommandOutput(prev => [
-        ...prev.slice(0, -1),
-        "ERROR: Failed to execute command. Backend endpoint not available.",
-        ""
-      ]);
-    } finally {
-      setCommandRunning(false);
-      setCommand("");
-    }
-  };
-
-  // Function to auto-fill command with device IP
-  const autoFillCommand = (ip: string, cmd: string = "nmap") => {
-    setCommand(`${cmd} ${ip}`);
-    // Scroll to investigation console
-    setTimeout(() => {
-      document.getElementById("investigation-console")?.scrollIntoView({ behavior: "smooth" });
-    }, 100);
-  };
-
-  // Expose autoFillCommand globally for other components
-  useEffect(() => {
-    (window as any).autoFillInvestigation = autoFillCommand;
-    return () => {
-      delete (window as any).autoFillInvestigation;
-    };
-  }, []);
 
   return (
     <div className="space-y-6">
@@ -264,63 +188,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Investigation Console */}
-      <div id="investigation-console" className="glass rounded-lg p-6">
-        <div className="flex items-center space-x-3 mb-6">
-          <Terminal className="w-7 h-7 text-primary" />
-          <div>
-            <h2 className="text-2xl font-semibold">Investigation Console</h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              Controlled security investigation tools
-            </p>
-          </div>
-        </div>
-
-        {/* Command Input */}
-        <div className="flex space-x-2 mb-4">
-          <input
-            type="text"
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && !commandRunning && runCommand()}
-            placeholder="Enter command (ping, tracert, nslookup, nmap, arp, netstat)"
-            className="flex-1 px-5 py-3 bg-background/50 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary font-mono text-sm"
-            disabled={commandRunning}
-          />
-          <button
-            onClick={runCommand}
-            disabled={commandRunning || !command.trim()}
-            className="px-8 py-3 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-          >
-            {commandRunning ? "Running..." : "Run"}
-          </button>
-        </div>
-
-        {/* Command Output */}
-        <div className="bg-black/50 rounded-lg p-5 font-mono text-sm min-h-[200px] max-h-[400px] overflow-y-auto leading-relaxed">
-          {commandOutput.length === 0 ? (
-            <div className="text-muted-foreground">
-              <p className="text-green-400">$ Investigation Console Ready</p>
-              <p className="mt-3">Allowed commands:</p>
-              <ul className="ml-4 mt-2 space-y-1">
-                {allowedCommands.map(cmd => (
-                  <li key={cmd}>• {cmd}</li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            commandOutput.map((line, idx) => (
-              <div key={idx} className={line.startsWith("$") ? "text-green-400 font-semibold" : line.startsWith("ERROR") ? "text-red-400" : "text-gray-300"}>
-                {line}
-              </div>
-            ))
-          )}
-        </div>
-
-        <div className="mt-4 text-xs text-muted-foreground">
-          <p>⚠️ Only whitelisted security investigation commands are allowed</p>
-        </div>
-      </div>
+      <section id="investigation-console" className="glass rounded-lg p-6">
+        <h2 className="text-xl font-semibold">Diagnostics disabled</h2>
+        <p className="mt-2 text-muted-foreground">
+          Remote command execution is unavailable in this prototype. No shell or network command will run here.
+        </p>
+      </section>
     </div>
   );
 }

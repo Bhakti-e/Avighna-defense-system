@@ -1,4 +1,5 @@
 "use client";
+import { apiFetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
 import { Activity, AlertTriangle, Shield } from "lucide-react";
@@ -30,11 +31,11 @@ export default function ReconPage() {
 
   const fetchReconData = async () => {
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL;
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
       
       const [alertsRes, statsRes] = await Promise.all([
-        fetch(`${API_URL}/network/alerts`),
-        fetch(`${API_URL}/network/stats`),
+        apiFetch(`${API_URL}/network/alerts`),
+        apiFetch(`${API_URL}/network/stats`),
       ]);
       
       const alertsData = await alertsRes.json();
