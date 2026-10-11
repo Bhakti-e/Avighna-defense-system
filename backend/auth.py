@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from . import models
-from .database import get_db
+from .database import get_db, SessionLocal
 import os
 
 # Security configuration
@@ -55,9 +55,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     )
     
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require_exp": True})
         username: str = payload.get("sub")
-        if username is None:
+        if not isinstance(username, str) or not username:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -72,5 +72,27 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 def get_current_active_user(current_user: models.User = Depends(get_current_user)):
     """Get current active user"""
     if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=403, detail="Inactive user")
     return current_user
+
+
+ROLE_PERMISSIONS = {
+    "user": {"read"}, "viewer": {"read"}, "analyst": {"read"},
+    "admin": {"read", "admin"},
+}
+
+def authorize_header(authorization: str, permission: str):
+    """Database-backed permissions; token-supplied roles are never trusted."""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
+    with SessionLocal() as db:
+        user = get_current_active_user(get_current_user(token.strip(), db))
+        if permission not in ROLE_PERMISSIONS.get(user.role, set()):
+            raise HTTPException(403, "Permission denied")
+        return user.username
+
+def require_admin(user: models.User = Depends(get_current_active_user)):
+    if "admin" not in ROLE_PERMISSIONS.get(user.role, set()):
+        raise HTTPException(403, "Administrator permission required")
+    return user

@@ -39,6 +39,14 @@ def application(tmp_path_factory):
             scope = dict(scope, client=("127.0.0.1", 12345))
             await app(scope, receive, send)
         with TestClient(loopback_app) as client:
+            from backend.database import SessionLocal
+            from backend.models import User
+            from backend.auth import create_access_token
+            with SessionLocal() as db:
+                db.add(User(username="offline_admin", email="admin@example.com",
+                            hashed_password="!login-disabled-test-fixture", role="admin", is_active=True))
+                db.commit()
+            client.headers["Authorization"] = "Bearer " + create_access_token({"sub": "offline_admin"})
             yield client, database_file
         engine.dispose()
 
@@ -139,3 +147,75 @@ def test_read_routes_return_valid_shapes(application):
     client, _ = application
     assert isinstance(client.get("/reports/list").json()["reports"], list)
     assert "devices" in client.get("/stats/dashboard").json()
+
+
+@pytest.mark.parametrize("path", [
+    "/devices/", "/alerts/", "/stats/dashboard", "/stats/network-activity",
+    "/stats/threat-trends", "/reports/list", "/reports/download/1",
+    "/reports-db/incidents", "/reports-db/isolation/details",
+    "/reports-db/observation/details", "/auth/me", "/openapi.json",
+])
+def test_sensitive_routes_require_authentication(application, path):
+    client, _ = application
+    response = client.get(path, headers={"Authorization": ""})
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+def permission_token(role, active=True):
+    from backend.database import SessionLocal
+    from backend.models import User
+    from backend.auth import create_access_token
+    import uuid
+    username = "permission_" + uuid.uuid4().hex[:12]
+    with SessionLocal() as db:
+        db.add(User(username=username, email=username + "@example.com",
+                    hashed_password="!disabled-test-fixture", role=role, is_active=active))
+        db.commit()
+    return {"Authorization": "Bearer " + create_access_token({"sub": username, "role": "admin"})}
+
+@pytest.mark.parametrize("role", ["user", "viewer", "analyst"])
+def test_readers_cannot_invoke_disabled_actions(application, role):
+    client, _ = application
+    headers = permission_token(role)
+    assert client.get("/devices/", headers=headers).status_code == 200
+    assert client.post("/actions/quarantine", headers=headers, json={}).status_code == 403
+
+@pytest.mark.parametrize("command", ["ping 127.0.0.1 & whoami", "nmap; whoami",
+                                     "$(whoami)", "powershell", "ping | whoami"])
+def test_console_never_executes_metacharacters_or_commands(application, command):
+    client, _ = application
+    assert client.post("/investigation/execute", json={"command": command}).status_code == 503
+    assert client.post("/investigation/execute", json={"command": command},
+                       headers={"Authorization": ""}).status_code == 401
+
+@pytest.mark.parametrize("role,active", [("unknown-role", True), ("admin", False)])
+def test_unknown_roles_and_disabled_accounts_rejected(application, role, active):
+    client, _ = application
+    assert client.get("/devices/", headers=permission_token(role, active)).status_code == 403
+
+def test_expired_and_malformed_tokens_rejected(application):
+    from backend.auth import create_access_token
+    from datetime import timedelta
+    client, _ = application
+    token = create_access_token({"sub": "offline_admin"}, timedelta(seconds=-1))
+    for bad in (token, "invalid-token"):
+        assert client.get("/devices/", headers={"Authorization": "Bearer " + bad}).status_code == 401
+
+def test_signup_cannot_assign_admin_role(application):
+    client, _ = application
+    response = client.post("/auth/signup", json={
+        "username": "ordinary_signup", "email": "ordinary@example.com",
+        "password": "Only-a-test-password-92", "role": "admin"})
+    assert response.status_code == 200
+    assert response.json()["user"]["role"] == "user"
+
+def test_investigation_module_contains_no_subprocess_or_shell_runner():
+    import ast
+    tree = ast.parse((Path(__file__).resolve().parents[2] /
+                      "backend/routers/investigation.py").read_text(encoding="utf8"))
+    forbidden = {"subprocess", "os", "platform"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert not forbidden.intersection(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom):
+            assert node.module not in forbidden

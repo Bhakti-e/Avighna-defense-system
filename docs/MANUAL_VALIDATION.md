@@ -37,12 +37,12 @@ A key rotation requires API restart and sign-in again. Never include keys or tok
 |---|---|---|
 | 1 | Follow fresh setup; open http://127.0.0.1:8000/health. | API says offline; collection, enforcement and shell false. Manual run pending. |
 | 2 | Open dashboard; inspect inventory and intelligence widgets. | Offline banner visible. Inventory comes from SQLite; demo intelligence still has only a global warning. Per-widget separation is incomplete (Stage 5). |
-| 3 | Open http://127.0.0.1:8000/discovery/scan without approving any scope. | HTTP 503; no scan. Approved-scope configuration is not implemented; positive discovery test requires an explicitly authorized lab later. |
+| 3 | Open http://127.0.0.1:8000/discovery/scan without approving any scope. | HTTP 401 without authentication; an authenticated administrator receives 503; no scan. Approved-scope configuration is not implemented; positive discovery test requires an explicitly authorized lab later. |
 | 4 | Review tests/offline/test_visibility.py: repeated simulated discovery and traffic for a device with an old heartbeat. Run that test file locally. | Network timestamp advances; heartbeat/event timestamps do not. This is automated evidence only; end-to-end testing needs an authorized agent/device and enabled safe ingestion later. |
 | 5 | Review loss/stale/offline/recovery test and API fields last_agent_heartbeat, agent_status. | Healthy <=60s, stale >60 through180s, offline >180s; missing/future heartbeat unknown. Dedicated dashboard states and real-device recovery validation remain pending. |
 | 6 | Inspect SensorHealth alerts created by the isolated tests. | Stored evaluation timestamp, heartbeat, source, rule and limitations; no compromise verdict or automatic action. Live analyst UI review pending. |
 | 7 | Open Reports; do not enable legacy generation to test it. | Generation stays blocked. Real-evidence/time-range PDF correctness is NOT implemented or manually validated (Stage 4). |
-| 8 | POST /investigation/execute or /actions/quarantine locally without credentials, using only an empty JSON body. | HTTP 503 and no action. This tests disabling only; consistent 401/403 role authorization remains Stage 3 work. Do not send real commands/targets. |
+| 8 | POST /investigation/execute or /actions/quarantine locally without credentials, using only an empty JSON body. | HTTP 401 without credentials; a signed-in reader receives 403; an administrator receives 503 with no action. Automated coverage passes; manual verification remains pending. Do not send real commands/targets. |
 | 9 | Do not attempt real containment. | Preview, approval, confirmation, failure and rollback are NOT implemented/validated. Requires an isolated lab or mock enforcement point in Stage 7. |
 | 10 | Observe startup in Task Manager and review /health. | No scanner/capture/shell/firewall worker should start. Runtime guards are covered by offline tests; independent manual observation is pending. |
 
