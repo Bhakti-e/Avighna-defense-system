@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # ============================================================================
     # APPLICATION
     # ============================================================================
+    offline_mode: bool = True
     app_name: str = "AVIGHNA"
     app_version: str = "3.0.0"
     app_description: str = "Network Defense & Threat Detection Platform"
@@ -30,7 +31,7 @@ class Settings(BaseSettings):
     # ============================================================================
     # SERVER
     # ============================================================================
-    server_host: str = "0.0.0.0"
+    server_host: str = "127.0.0.1"
     server_port: int = 8000
     server_workers: int = 4
     server_reload: bool = False
@@ -54,7 +55,7 @@ class Settings(BaseSettings):
     # NETWORK SCANNING
     # ============================================================================
     # Scapy passive monitoring
-    enable_scapy_monitor: bool = True  # Enable real-time ARP/WiFi monitoring
+    enable_scapy_monitor: bool = False  # Enable real-time ARP/WiFi monitoring
     scapy_interface: Optional[str] = None  # Network interface (None = auto-detect)
     scapy_require_admin: bool = True  # Require admin/root privileges
     
@@ -62,8 +63,8 @@ class Settings(BaseSettings):
     # SECURITY
     # ============================================================================
     # Enforcement mode
-    safe_mode: bool = False  # false = attempt real enforcement (requires admin/root)
-    gateway_mode: bool = True  # true = backend acts as network gateway
+    safe_mode: bool = True  # false = attempt real enforcement (requires admin/root)
+    gateway_mode: bool = False  # true = backend acts as network gateway
     
     # API Security
     api_key_enabled: bool = False
@@ -103,7 +104,7 @@ class Settings(BaseSettings):
     # ============================================================================
     # CYBER THREAT INTELLIGENCE (CTI)
     # ============================================================================
-    cti_enabled: bool = True
+    cti_enabled: bool = False
     cti_update_interval: int = 3600  # seconds (1 hour)
     
     # Threat feeds
@@ -134,7 +135,7 @@ class Settings(BaseSettings):
     # ============================================================================
     # MACHINE LEARNING
     # ============================================================================
-    ml_enabled: bool = True
+    ml_enabled: bool = False
     ml_model_path_if: str = "backend/enhanced_if_model.joblib"
     ml_model_path_autoencoder: str = "backend/autoencoder_model.h5"
     ml_model_path_lstm: str = "backend/lstm_model.h5"
@@ -172,16 +173,16 @@ class Settings(BaseSettings):
     # ============================================================================
     # ACTIVE SCANNING
     # ============================================================================
-    active_scan_enabled: bool = True
+    active_scan_enabled: bool = False
     active_scan_interval: int = 300  # seconds (5 minutes)
     arp_scan_interval: int = 8  # seconds
     
     # ============================================================================
     # RESPONSE ACTIONS
     # ============================================================================
-    response_auto_fix_enabled: bool = True
-    response_observation_enabled: bool = True
-    response_isolation_enabled: bool = True
+    response_auto_fix_enabled: bool = False
+    response_observation_enabled: bool = False
+    response_isolation_enabled: bool = False
     
     # Observation settings
     observation_bandwidth_limit_kbps: int = 100
@@ -246,7 +247,7 @@ class Settings(BaseSettings):
     # ============================================================================
     # ROUTER DISCOVERY (PRIMARY)
     # ============================================================================
-    router_discovery_enabled: bool = True  # Use router as primary device source
+    router_discovery_enabled: bool = False  # Use router as primary device source
     router_ip: str = "192.168.0.1"  # Router admin IP
     router_username: str = "admin"  # Router admin username
     router_password: str = "admin"  # Router admin password
@@ -266,7 +267,9 @@ def get_settings() -> Settings:
     Get cached settings instance
     Use this function to access settings throughout the application
     """
-    return Settings()
+    # Do not inherit private/live .env configuration in the offline baseline.
+    offline = os.getenv("OFFLINE_MODE", "true").lower() not in {"false", "0", "no"}
+    return Settings(_env_file=None if offline else ".env")
 
 
 # Global settings instance

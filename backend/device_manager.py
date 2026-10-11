@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 try:
     from mac_vendor_lookup import MacLookup
     mac_lookup = MacLookup()
-    mac_lookup.update_vendors()  # Download latest OUI database
+    # Use an existing vendor cache only; never download during import.
     MAC_LOOKUP_AVAILABLE = True
     logger.info("MAC vendor lookup initialized with IEEE OUI database")
 except Exception as e:
@@ -39,7 +39,7 @@ class DeviceManager:
     # Devices older than RECENT_THRESHOLD are marked OFFLINE
     
     def __init__(self):
-        self.local_ip = self._get_local_ip()
+        self.local_ip = None  # Resolve only when a collection operation needs it.
         logger.info(f"Device Manager initialized - Local IP: {self.local_ip}")
     
     def _get_local_ip(self) -> str:
@@ -52,6 +52,8 @@ class DeviceManager:
     
     def is_local_ip(self, ip: str) -> bool:
         """Check if IP is local machine"""
+        if self.local_ip is None:
+            self.local_ip = self._get_local_ip()
         return ip == self.local_ip or ip.startswith('127.')
     
     def _lookup_vendor(self, mac: str) -> str:

@@ -9,14 +9,21 @@ from sqlalchemy.pool import NullPool
 import os
 import logging
 from dotenv import load_dotenv
+from .config import settings
 
-# Load .env file
-load_dotenv()
+# Live configuration is never loaded by the offline preview.
+if not settings.offline_mode:
+    load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 # Database URL from environment or default to SQLite
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./avighna_defense.db")
+if settings.offline_mode:
+    DATABASE_URL = os.environ.get("AVIGHNA_OFFLINE_DATABASE_URL", "sqlite:///./avighna_offline.db")
+    if not DATABASE_URL.startswith("sqlite:///"):
+        raise ValueError("Offline mode requires a local SQLite database.")
+else:
+    DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./avighna_defense.db")
 
 # Determine if using PostgreSQL
 is_postgres = DATABASE_URL.startswith("postgresql")
