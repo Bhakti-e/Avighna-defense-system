@@ -77,6 +77,7 @@ Review changes to the lock and rerun tests before adopting new versions.
 - Windows startup needs Python -X utf8 because existing state.py prints emoji.
 
 These checks do not validate live detectors, ML accuracy, containment, or report truthfulness.
-Changes remain local and uncommitted. Stage 2 and later were not implemented.
+At that checkpoint changes were local and uncommitted; Stage 2 was not yet implemented.
+See MANUAL_VALIDATION.md for the subsequent Stage 2 behavior and pending manual gates.
 Stage 0 source backup: C:\\Projects\\domeMCA-baseline-20261010-232703.
 Stage 0 Git reference: safety/stage01-20261010-232703 (original HEAD).
