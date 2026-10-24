@@ -5,16 +5,16 @@ Online operation stays unavailable until scope and authorization gates are teste
 """
 from contextlib import asynccontextmanager
 import ipaddress
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .config import settings
 from .secret_config import load_secret_key
 load_secret_key()  # Fail before database creation or router initialization.
-from .database import init_db
+from .database import init_db, get_db, SessionLocal
 from .auth import authorize_header
-from .routers import auth, alerts_db, devices_db, stats, reports, reports_db
+from .routers import auth, alerts_db, devices_db, stats, reports, reports_db, discovery
 
 if not settings.offline_mode:
     raise RuntimeError("Online mode is unavailable in Stage 1; use OFFLINE_MODE=true.")
@@ -24,7 +24,7 @@ READ_PATHS = {
     "/auth/me", "/devices/", "/alerts/", "/stats/dashboard",
     "/stats/network-activity", "/stats/threat-trends", "/reports/list",
     "/reports-db/incidents", "/reports-db/isolation/details",
-    "/reports-db/observation/details",
+    "/reports-db/observation/details", "/discovery/status",
 }
 AUTH_WRITES = {"/auth/signup", "/auth/login", "/auth/logout"}
 
@@ -37,8 +37,8 @@ async def lifespan(app):
 
 def create_app():
     app = FastAPI(
-        title="AVIGHNA Offline Preview", version="3.0.0",
-        description="Stage 1 offline baseline. No live collection or containment.",
+        title="AVIGHNA Local Prototype", version="3.0.0",
+        description="Local API with explicitly approved external discovery. No containment.",
         lifespan=lifespan,
     )
 
@@ -76,7 +76,9 @@ def create_app():
                 "mode": "offline",
             }, status_code=503)
         response = await call_next(request)
-        response.headers["X-AVIGHNA-Mode"] = "offline"
+        with SessionLocal() as db:
+            active = discovery.collection_status(db)["active"]
+        response.headers["X-AVIGHNA-Mode"] = "discovery" if active else "offline"
         return response
 
     app.add_middleware(
@@ -87,20 +89,24 @@ def create_app():
     )
 
     @app.get("/")
-    def root():
-        return {"name": "AVIGHNA", "version": "3.0.0", "status": "offline",
-                "monitoring": False, "enforcement": False}
+    def root(db=Depends(get_db)):
+        active = discovery.collection_status(db)["active"]
+        return {"name": "AVIGHNA", "version": "3.0.0",
+                "status": "discovery" if active else "offline",
+                "monitoring": active, "enforcement": False}
 
     @app.get("/health")
-    def health():
-        return {"status": "ok", "mode": "offline", "collection_enabled": False,
-                "enforcement_enabled": False, "shell_enabled": False,
-                "note": "API availability is not a device-security verdict."}
+    def health(db=Depends(get_db)):
+        active = discovery.collection_status(db)["active"]
+        return {"status": "ok", "mode": "discovery" if active else "offline",
+                "collection_enabled": active, "enforcement_enabled": False, "shell_enabled": False,
+                "note": "Network discovery is not endpoint monitoring or a security verdict."}
 
     for router, prefix in (
         (auth.router, "/auth"), (alerts_db.router, "/alerts"),
         (devices_db.router, "/devices"), (stats.router, "/stats"),
         (reports.router, "/reports"), (reports_db.router, "/reports-db"),
+        (discovery.router, "/discovery"),
     ):
         app.include_router(router, prefix=prefix)
     return app

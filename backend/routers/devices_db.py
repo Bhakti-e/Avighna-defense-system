@@ -50,6 +50,7 @@ def list_devices(
             "hostname": device['hostname'],
             "vendor": device['vendor'],
             "source": device['source'],
+            "risk_assessed": device["risk_level"] not in {None, "UNKNOWN"},
             "last_network_seen": device["last_network_seen"],
             "last_agent_heartbeat": device["last_agent_heartbeat"],
             "last_endpoint_event": device["last_endpoint_event"],

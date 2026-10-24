@@ -153,7 +153,7 @@ def test_read_routes_return_valid_shapes(application):
     "/devices/", "/alerts/", "/stats/dashboard", "/stats/network-activity",
     "/stats/threat-trends", "/reports/list", "/reports/download/1",
     "/reports-db/incidents", "/reports-db/isolation/details",
-    "/reports-db/observation/details", "/auth/me", "/openapi.json",
+    "/reports-db/observation/details", "/auth/me", "/openapi.json", "/discovery/status",
 ])
 def test_sensitive_routes_require_authentication(application, path):
     client, _ = application
@@ -219,3 +219,27 @@ def test_investigation_module_contains_no_subprocess_or_shell_runner():
             assert not forbidden.intersection(alias.name for alias in node.names)
         if isinstance(node, ast.ImportFrom):
             assert node.module not in forbidden
+
+
+def test_health_reflects_collector_lease_without_starting_collection(application):
+    from backend.database import SessionLocal
+    from backend.models import DiscoverySession
+    from datetime import timedelta
+    client, _ = application
+    with SessionLocal() as db:
+        row = DiscoverySession(id=1, session_id="fixture", scope="192.168.50.0/24",
+            profile="TestNetwork", status="running", interval_seconds=60,
+            approved_at=datetime.utcnow(), lease_expires=datetime.utcnow() + timedelta(seconds=60),
+            last_success=datetime.utcnow(), observed_count=2)
+        db.add(row)
+        db.commit()
+        try:
+            assert client.get("/health").json()["mode"] == "discovery"
+            assert client.get("/discovery/status").json()["observed_count"] == 2
+            row.lease_expires = datetime.utcnow() - timedelta(seconds=1)
+            db.commit()
+            assert client.get("/health").json()["mode"] == "offline"
+            assert client.get("/discovery/status").json()["state"] == "stale"
+        finally:
+            db.delete(row)
+            db.commit()

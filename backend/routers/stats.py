@@ -8,6 +8,7 @@ from sqlalchemy import func
 from ..database import get_db
 from .. import models, state
 import logging
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,8 +24,8 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         from ..device_manager import device_manager
         
         # Get device counts - only ACTIVE and RECENTLY_SEEN devices
-        total_devices = device_manager.get_device_count()  # ACTIVE + RECENTLY_SEEN
-        active_devices = device_manager.get_device_count(status="ACTIVE")
+        total_devices = db.query(models.Device).count()
+        active_devices = db.query(models.Device).filter(models.Device.last_network_seen >= datetime.utcnow() - timedelta(seconds=120)).count()
         
         # Get isolated and observed counts
         isolated_devices = db.query(models.Device).filter(
@@ -43,26 +44,16 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         # Get reconnaissance events from state (not in DB)
         recon_events = len(state.reconnaissance_findings) if hasattr(state, 'reconnaissance_findings') else 0
         
-        # Calculate threat score
-        threat_score = 0
-        if isolated_devices > 0:
-            threat_score = 95
-        elif recent_alerts > 5:
-            threat_score = 75
-        elif recon_events > 5:
-            threat_score = 65
-        elif observed_devices > 0:
-            threat_score = 45
-        else:
-            threat_score = 25
-        
+        # No validated aggregate threat score exists for this prototype.
+        threat_score = None
+
         return {
             "devices": {
                 "total": total_devices,
                 "active": active_devices,
                 "isolated": isolated_devices,
                 "observed": observed_devices,
-                "normal": total_devices - isolated_devices - observed_devices
+                "normal": None
             },
             "alerts": {
                 "total": total_alerts,
@@ -74,7 +65,7 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
                 "active": recon_events > 0
             },
             "threat_score": threat_score,
-            "status": "critical" if threat_score >= 70 else "warning" if threat_score >= 40 else "normal"
+            "status": "unassessed"
         }
     except Exception as e:
         logger.error(f"Failed to get dashboard stats: {e}")

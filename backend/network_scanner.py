@@ -1,345 +1,287 @@
-"""
-Network Scanner for AVIGHNA
-============================
-Discovers all devices on local network (agent + non-agent devices)
-Detects rogue/unauthorized devices automatically
+"""Explicitly approved Windows Wi-Fi discovery. No import/startup side effects.
 
-Features:
-- ARP-based network scanning (fast)
-- Device fingerprinting (OS, vendor detection)
-- Whitelist/blacklist management
-- Auto-blocking of rogue devices
+Run locally with --approve-scope, --profile and --gateway. No firewall, packet
+capture, port enumeration, threat verdicts or endpoint-heartbeat writes.
 """
-
-import time
-import subprocess
+import argparse
+import ipaddress
+import json
+import os
 import re
-import logging
-import threading
-from typing import List, Dict, Any, Optional
-from collections import defaultdict
-from datetime import datetime
+import shutil
+import socket
+import subprocess
+import time
+import uuid
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from pathlib import Path
 
-logger = logging.getLogger(__name__)
+PRIVATE = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+SNAPSHOT_COMMAND = "(Get-NetConnectionProfile -InterfaceAlias 'Wi-Fi' -ErrorAction Stop).Name | ConvertTo-Json -Compress"
+
+
+def validate_scope(scope):
+    net = ipaddress.ip_network(scope, strict=True)
+    if net.version != 4 or not 24 <= net.prefixlen <= 30 or not any(net.subnet_of(p) for p in PRIVATE):
+        raise ValueError("Approve one RFC1918 IPv4 subnet between /24 and /30.")
+    return net
+
+
+def normalize_mac(mac):
+    value = (mac or "").upper().replace("-", ":")
+    if not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", value):
+        return None
+    if value == "00:00:00:00:00:00" or int(value[:2], 16) & 1:
+        return None
+    return value
+
+
+def validate_attachment(snapshot, scope, profile, gateway):
+    net = validate_scope(scope)
+    if not profile or snapshot.get("interface") != "Wi-Fi" or snapshot.get("profile") != profile:
+        raise ValueError("Approved Wi-Fi profile is not connected. Collection stopped.")
+    address = ipaddress.ip_address(snapshot["ip"])
+    attached = ipaddress.ip_network(str(address) + "/" + str(snapshot["prefix"]), strict=False)
+    if attached != net or snapshot.get("gateway") != gateway or ipaddress.ip_address(gateway) not in net:
+        raise ValueError("Wi-Fi subnet or gateway changed. Collection stopped.")
+    if address not in net or not normalize_mac(snapshot.get("mac")):
+        raise ValueError("Wi-Fi adapter identity could not be verified.")
+    return snapshot
+
+
+def parse_windows_snapshot(profile, config, mac_csv, hostname):
+    import csv
+    import io
+    block = re.search(r"(?m)^[^\r\n]*adapter Wi-Fi:[ \t]*\r?\n([\s\S]*?)(?=^[^\s]|\Z)", config)
+    if block is None:
+        raise ValueError("Connected Wi-Fi adapter not found in Windows configuration.")
+    text = block.group(1)
+    ipv4 = re.search(r"IPv4 Address[^:\r\n]*:\s*([\d.]+)", text)
+    mask = re.search(r"Subnet Mask[^:\r\n]*:\s*([\d.]+)", text)
+    gateway = re.search(r"Default Gateway[\s\S]*?(\d+\.\d+\.\d+\.\d+)", text)
+    if not all((ipv4, mask, gateway)) or not isinstance(profile, str):
+        raise ValueError("Cannot verify Wi-Fi profile, IPv4 subnet and gateway.")
+    rows = list(csv.reader(io.StringIO(mac_csv)))
+    mac = next((row[2] for row in rows if len(row) >= 3 and row[0] == "Wi-Fi"), None)
+    return {"profile": profile, "interface": "Wi-Fi", "ip": ipv4.group(1),
+            "prefix": ipaddress.ip_network("0.0.0.0/" + mask.group(1)).prefixlen,
+            "gateway": gateway.group(1), "mac": normalize_mac(mac), "hostname": hostname}
+
+
+def windows_snapshot():
+    if os.name != "nt":
+        raise RuntimeError("This collector currently supports Windows Wi-Fi only.")
+    def read(args, timeout):
+        return subprocess.run(args, capture_output=True, text=True,
+                              timeout=timeout, check=True, shell=False).stdout
+    profile = json.loads(read(["powershell.exe", "-NoProfile", "-NonInteractive",
+                               "-Command", SNAPSHOT_COMMAND], 60))
+    return parse_windows_snapshot(profile, read(["ipconfig"], 15),
+                                  read(["getmac", "/v", "/fo", "csv"], 15), socket.gethostname())
+
+
+def parse_hosts(xml_text, scope):
+    net = validate_scope(scope)
+    root = ET.fromstring(xml_text)
+    finished = root.find("runstats/finished")
+    if finished is None or finished.get("exit") != "success":
+        raise ValueError("Discovery did not complete successfully.")
+    rows = {}
+    for host in root.findall("host"):
+        status = host.find("status")
+        if status is None or status.get("state") != "up":
+            continue
+        ipv4 = host.find("address[@addrtype='ipv4']")
+        if ipv4 is None:
+            continue
+        ip = ipaddress.ip_address(ipv4.get("addr"))
+        if ip not in net or ip in (net.network_address, net.broadcast_address):
+            raise ValueError("Discovery returned an address outside the approved host range.")
+        mac = host.find("address[@addrtype='mac']")
+        hostname = host.find("hostnames/hostname")
+        name = hostname.get("name") if hostname is not None else None
+        rows[str(ip)] = {
+            "ip": str(ip), "mac": normalize_mac(mac.get("addr")) if mac is not None else None,
+            "hostname": name[:255] if name and name != str(ip) else None,
+            "vendor": mac.get("vendor", "")[:255] or None if mac is not None else None,
+        }
+    return list(rows.values())
+
+
+def nmap_hosts(scope):
+    validate_scope(scope)
+    executable = shutil.which("nmap")
+    if not executable:
+        executable = next((str(p) for p in (
+            Path(r"C:\Program Files (x86)\Nmap\nmap.exe"),
+            Path(r"C:\Program Files\Nmap\nmap.exe"),
+        ) if p.is_file()), None)
+    if not executable:
+        raise RuntimeError("Nmap is not installed. No discovery was attempted.")
+    result = subprocess.run(
+        [executable, "-sn", "-PR", "--max-retries", "1", "--host-timeout", "15s", "-oX", "-", scope],
+        capture_output=True, text=True, timeout=90, check=True, shell=False,
+    )
+    return parse_hosts(result.stdout, scope)
+
+
+def record_observations(db, rows, scope, observed_at):
+    """Update the existing Device inventory; never write endpoint clocks/risk."""
+    from .models import Device
+    for row in rows:
+        mac = row["mac"]
+        identity = "network:" + scope + ":" + (mac or "ip:" + row["ip"])
+        device = db.query(Device).filter(Device.device_id == identity).first()
+        if device is None and mac:
+            # Reuse an existing endpoint identity only on an exact MAC match.
+            matches = db.query(Device).filter(Device.mac_address == mac).all()
+            device = matches[0] if len(matches) == 1 else None
+        if device is None:
+            device = Device(device_id=identity, first_seen=observed_at, last_seen=observed_at,
+                            source="nmap", status="UNASSESSED", risk_level="UNKNOWN")
+            db.add(device)
+            db.flush()
+            device.risk_score = None
+        device.ip_address = row["ip"]
+        device.mac_address = mac
+        if row.get("hostname"):
+            device.hostname = row["hostname"]
+        if row.get("vendor"):
+            device.vendor = row["vendor"]
+        device.last_network_seen = observed_at
+
 
 class NetworkScanner:
-    """
-    Active network scanner that discovers all devices on local network
-    Runs periodically to detect new/rogue devices
-    """
-    
-    def __init__(self, network_cidr: str = "192.168.1.0/24", scan_interval: int = 60):
-        self.network_cidr = network_cidr
-        self.scan_interval = scan_interval
-        self.running = False
-        self.thread = None
-        
-        # Device tracking
-        self.known_devices = {}  # MAC -> device info
-        self.authorized_macs = set()  # Whitelist
-        self.blocked_macs = set()  # Blacklist
-        
-        # Statistics
-        self.scan_count = 0
-        self.rogue_detected_count = 0
-        self.last_scan_time = 0
-        
-    def start(self):
-        """Start background scanning"""
-        if self.running:
-            logger.warning("Network scanner already running")
-            return
-            
-        self.running = True
-        self.thread = threading.Thread(target=self._scan_loop, daemon=True)
-        self.thread.start()
-        logger.info(f"Network scanner started - scanning {self.network_cidr} every {self.scan_interval}s")
-        
-    def stop(self):
-        """Stop background scanning"""
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=5)
-        logger.info("Network scanner stopped")
-        
-    def _scan_loop(self):
-        """Main scanning loop"""
-        while self.running:
-            try:
-                self._perform_scan()
-                time.sleep(self.scan_interval)
-            except Exception as e:
-                logger.error(f"Network scan error: {e}")
-                time.sleep(self.scan_interval)
-                
-    def _perform_scan(self):
-        """Perform network scan and detect rogue devices"""
-        try:
-            self.scan_count += 1
-            self.last_scan_time = time.time()
-            
-            logger.info(f"Starting network scan #{self.scan_count}...")
-            
-            # Scan network using ARP
-            devices = self._scan_arp()
-            
-            logger.info(f"Found {len(devices)} device(s) on network")
-            
-            # Update device inventory
-            for device in devices:
-                self._update_device(device)
-            
-            # Detect rogue devices
-            rogue_devices = self._detect_rogue_devices(devices)
-            
-            if rogue_devices:
-                logger.warning(f"ROGUE DEVICES DETECTED: {len(rogue_devices)}")
-                for rogue in rogue_devices:
-                    self._handle_rogue_device(rogue)
-            
-        except Exception as e:
-            logger.error(f"Scan failed: {e}")
-            
-    def _scan_arp(self) -> List[Dict[str, Any]]:
-        """
-        Scan network using ARP (works on Windows/Linux/Mac)
-        Returns list of devices: [{"ip": "...", "mac": "...", "vendor": "..."}]
-        """
-        devices = []
-        
-        try:
-            # Use arp command (available on all platforms)
-            result = subprocess.run(
-                ['arp', '-a'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"ARP command failed: {result.stderr}")
-                return devices
-            
-            # Parse ARP output
-            # Windows format: 192.168.1.1    aa-bb-cc-dd-ee-ff     dynamic
-            # Linux format:   192.168.1.1 ether aa:bb:cc:dd:ee:ff C eth0
-            
-            for line in result.stdout.split('\n'):
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Extract IP address
-                ip_match = re.search(r'(\d+\.\d+\.\d+\.\d+)', line)
-                if not ip_match:
-                    continue
-                ip = ip_match.group(1)
-                
-                # Skip localhost and broadcast
-                if ip.startswith('127.') or ip.endswith('.255') or ip == '0.0.0.0':
-                    continue
-                
-                # Extract MAC address (both formats: aa:bb:cc:dd:ee:ff or aa-bb-cc-dd-ee-ff)
-                mac_match = re.search(r'([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}', line)
-                if not mac_match:
-                    continue
-                mac = mac_match.group(0).upper().replace('-', ':')
-                
-                # Get vendor from MAC OUI (first 3 octets)
-                vendor = self._get_vendor_from_mac(mac)
-                
-                devices.append({
-                    'ip': ip,
-                    'mac': mac,
-                    'vendor': vendor,
-                    'timestamp': time.time(),
-                    'scan_method': 'arp'
-                })
-            
-            logger.debug(f"ARP scan found {len(devices)} devices")
-            
-        except subprocess.TimeoutExpired:
-            logger.error("ARP scan timeout")
-        except Exception as e:
-            logger.error(f"ARP scan error: {e}")
-        
-        return devices
-    
-    def _get_vendor_from_mac(self, mac: str) -> str:
-        """
-        Get vendor name from MAC address OUI (Organizationally Unique Identifier)
-        First 3 octets identify manufacturer
-        """
-        # Common vendor OUI prefixes (simplified list)
-        oui_map = {
-            '00:50:56': 'VMware',
-            '00:0C:29': 'VMware',
-            '00:05:69': 'VMware',
-            '08:00:27': 'VirtualBox',
-            '52:54:00': 'QEMU/KVM',
-            'DC:A6:32': 'Raspberry Pi',
-            'B8:27:EB': 'Raspberry Pi',
-            'E4:5F:01': 'Raspberry Pi',
-            '00:1B:44': 'Cisco',
-            '00:1C:0E': 'Cisco',
-            '00:50:F2': 'Microsoft',
-            '00:15:5D': 'Microsoft',
-            '3C:5A:B4': 'Google',
-            '54:60:09': 'Google',
-            'AC:DE:48': 'Apple',
-            '00:03:93': 'Apple',
-            '00:1C:B3': 'Apple',
-            '28:6A:BA': 'Apple',
-            '40:6C:8F': 'Apple',
-            '00:1A:11': 'Google',
-            '00:1E:C2': 'Apple',
-            '00:26:BB': 'Apple',
-            '00:50:C2': 'IEEE 802.11',
-            '02:00:00': 'Xerox',
-        }
-        
-        # Get first 3 octets
-        oui = ':'.join(mac.split(':')[:3])
-        
-        return oui_map.get(oui, 'Unknown')
-    
-    def _update_device(self, device: Dict[str, Any]):
-        """Update device in known devices registry"""
-        mac = device['mac']
-        
-        if mac in self.known_devices:
-            # Update existing device
-            self.known_devices[mac]['last_seen'] = device['timestamp']
-            self.known_devices[mac]['ip'] = device['ip']
-            self.known_devices[mac]['connection_count'] = self.known_devices[mac].get('connection_count', 0) + 1
-        else:
-            # New device discovered
-            self.known_devices[mac] = {
-                'mac': mac,
-                'ip': device['ip'],
-                'vendor': device['vendor'],
-                'first_seen': device['timestamp'],
-                'last_seen': device['timestamp'],
-                'connection_count': 1,
-                'is_authorized': False,
-                'is_blocked': False
-            }
-            logger.info(f"NEW DEVICE: {mac} ({device['ip']}) - {device['vendor']}")
-    
-    def _detect_rogue_devices(self, current_devices: List[Dict]) -> List[Dict]:
-        """
-        Detect unauthorized devices
-        Returns list of rogue devices
-        """
-        rogue_devices = []
-        
-        for device in current_devices:
-            mac = device['mac']
-            
-            # Skip if already blocked
-            if mac in self.blocked_macs:
-                continue
-            
-            # Check if authorized
-            if mac not in self.authorized_macs:
-                # Not in whitelist = rogue device
-                rogue_devices.append({
-                    **device,
-                    'threat_type': 'rogue_device',
-                    'reason': 'Unauthorized device on network (not in whitelist)',
-                    'risk_score': 80.0
-                })
-                
-                self.rogue_detected_count += 1
-        
-        return rogue_devices
-    
-    def _handle_rogue_device(self, rogue: Dict[str, Any]):
-        """Handle detected rogue device"""
-        mac = rogue['mac']
-        ip = rogue['ip']
-        
-        logger.warning(f"ROGUE DEVICE: {mac} ({ip}) - {rogue['vendor']}")
-        logger.warning(f"Reason: {rogue['reason']}")
-        
-        # Mark as blocked
-        self.blocked_macs.add(mac)
-        
-        # Update device info
-        if mac in self.known_devices:
-            self.known_devices[mac]['is_blocked'] = True
-            self.known_devices[mac]['block_reason'] = rogue['reason']
-            self.known_devices[mac]['blocked_at'] = time.time()
-        
-        # TODO: Trigger alert in main system
-        # TODO: Auto-block at router level (if enabled)
-        # TODO: Block at gateway level (iptables)
-    
-    def authorize_device(self, mac: str):
-        """Add device to whitelist"""
-        mac = mac.upper().replace('-', ':')
-        self.authorized_macs.add(mac)
-        
-        if mac in self.known_devices:
-            self.known_devices[mac]['is_authorized'] = True
-            self.known_devices[mac]['authorized_at'] = time.time()
-        
-        logger.info(f"Device authorized: {mac}")
-    
-    def unauthorize_device(self, mac: str):
-        """Remove device from whitelist"""
-        mac = mac.upper().replace('-', ':')
-        self.authorized_macs.discard(mac)
-        
-        if mac in self.known_devices:
-            self.known_devices[mac]['is_authorized'] = False
-        
-        logger.info(f"Device unauthorized: {mac}")
-    
-    def block_device(self, mac: str, reason: str = "Manual block"):
-        """Add device to blacklist"""
-        mac = mac.upper().replace('-', ':')
-        self.blocked_macs.add(mac)
-        
-        if mac in self.known_devices:
-            self.known_devices[mac]['is_blocked'] = True
-            self.known_devices[mac]['block_reason'] = reason
-            self.known_devices[mac]['blocked_at'] = time.time()
-        
-        logger.info(f"Device blocked: {mac} - {reason}")
-    
-    def unblock_device(self, mac: str):
-        """Remove device from blacklist"""
-        mac = mac.upper().replace('-', ':')
-        self.blocked_macs.discard(mac)
-        
-        if mac in self.known_devices:
-            self.known_devices[mac]['is_blocked'] = False
-        
-        logger.info(f"Device unblocked: {mac}")
-    
-    def get_all_devices(self) -> List[Dict[str, Any]]:
-        """Get list of all known devices"""
-        return list(self.known_devices.values())
-    
-    def get_rogue_devices(self) -> List[Dict[str, Any]]:
-        """Get list of rogue (unauthorized) devices"""
-        return [
-            device for device in self.known_devices.values()
-            if not device.get('is_authorized', False) and not device.get('is_blocked', False)
-        ]
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """Get scanner statistics"""
-        return {
-            'scan_count': self.scan_count,
-            'last_scan_time': self.last_scan_time,
-            'total_devices': len(self.known_devices),
-            'authorized_devices': len(self.authorized_macs),
-            'blocked_devices': len(self.blocked_macs),
-            'rogue_detected_count': self.rogue_detected_count,
-            'is_running': self.running
-        }
+    def __init__(self, scope, profile, gateway, interval=60, snapshot=windows_snapshot, discover=nmap_hosts):
+        self.scope = str(validate_scope(scope))
+        if not profile or not gateway or not 60 <= interval <= 3600:
+            raise ValueError("Profile, gateway and an interval of 60..3600 seconds are required.")
+        self.profile, self.gateway, self.interval = profile, gateway, interval
+        self.snapshot, self.discover = snapshot, discover
+        self.session_id = uuid.uuid4().hex
 
-# Global scanner instance
-network_scanner = NetworkScanner()
+    def attachment(self):
+        return validate_attachment(self.snapshot(), self.scope, self.profile, self.gateway)
+
+    def start_session(self, db):
+        from sqlalchemy import text
+        from .models import DiscoverySession
+        self.attachment()  # Fail before any discovery or session activation.
+        db.execute(text("BEGIN IMMEDIATE"))
+        current = db.get(DiscoverySession, 1)
+        now = datetime.utcnow()
+        if current and current.lease_expires and current.lease_expires > now and not current.stop_requested:
+            db.rollback()
+            raise ValueError("A collector session is already active.")
+        if current is None:
+            current = DiscoverySession(id=1)
+            db.add(current)
+        current.session_id, current.scope, current.profile = self.session_id, self.scope, self.profile
+        current.status, current.interval_seconds = "starting", self.interval
+        current.approved_at, current.last_success = now, None
+        current.lease_expires = now + timedelta(seconds=420 + self.interval)
+        current.stop_requested, current.observed_count, current.error = False, 0, None
+        db.commit()
+
+    def scan_once(self, db):
+        from .models import DiscoverySession, DiscoveryRun
+        db.expire_all()
+        session = db.get(DiscoverySession, 1)
+        if not session or session.session_id != self.session_id or session.stop_requested:
+            return False
+        session.status = "scanning"
+        session.lease_expires = datetime.utcnow() + timedelta(seconds=420 + self.interval)
+        run = DiscoveryRun(session_id=self.session_id, scope=self.scope,
+                           started_at=datetime.utcnow(), status="running")
+        db.add(run)
+        db.commit()
+        try:
+            before = self.attachment()
+            rows = self.discover(self.scope)
+            after = self.attachment()
+            if before != after:
+                raise ValueError("Network attachment changed during discovery; results discarded.")
+            # Include the collector laptop using its adapter facts, not fabricated discovery data.
+            rows = [r for r in rows if r["ip"] != after["ip"]]
+            rows.append({"ip": after["ip"], "mac": normalize_mac(after["mac"]),
+                         "hostname": after.get("hostname") or socket.gethostname(), "vendor": None})
+            db.refresh(session)
+            if session.stop_requested or session.session_id != self.session_id:
+                run.status, run.finished_at = "cancelled", datetime.utcnow()
+                db.commit()
+                return False
+            now = datetime.utcnow()
+            record_observations(db, rows, self.scope, now)
+            run.status, run.finished_at = "success", now
+            run.observed_count, run.observations = len(rows), rows
+            session.status, session.last_success = "running", now
+            session.observed_count, session.error = len(rows), None
+            session.lease_expires = now + timedelta(seconds=420 + self.interval)
+            db.commit()
+            return True
+        except Exception as error:
+            db.rollback()
+            # Failed attempts remain auditable, never reported as a successful empty scan.
+            session = db.get(DiscoverySession, 1)
+            run = db.get(DiscoveryRun, run.id)
+            message = str(error)[:500] if isinstance(error, ValueError) else type(error).__name__ + ": discovery failed; inspect local collector."
+            run.status, run.finished_at, run.error = "error", datetime.utcnow(), message
+            if session.session_id == self.session_id:
+                session.status, session.error, session.lease_expires = "error", message, None
+            db.commit()
+            raise
+
+    def finish(self, db):
+        from .models import DiscoverySession
+        db.expire_all()
+        session = db.get(DiscoverySession, 1)
+        if session and session.session_id == self.session_id:
+            if session.status != "error":
+                session.status = "stopped"
+            session.lease_expires = None
+            db.commit()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Explicitly approved local Wi-Fi host discovery; Ctrl+C stops.")
+    parser.add_argument("--approve-scope")
+    parser.add_argument("--profile")
+    parser.add_argument("--gateway")
+    parser.add_argument("--interval", type=int, default=60)
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--stop", action="store_true")
+    args = parser.parse_args()
+    if not args.stop and not all((args.approve_scope, args.profile, args.gateway)):
+        parser.error("--approve-scope, --profile and --gateway explicitly authorize this session.")
+    from .database import init_db, SessionLocal
+    from .models import DiscoverySession
+    init_db()
+    with SessionLocal() as db:
+        if args.stop:
+            session = db.get(DiscoverySession, 1)
+            if session:
+                session.stop_requested, session.status, session.lease_expires = True, "stopping", None
+                db.commit()
+            print("Stop requested. An in-flight bounded scan may finish; its results will be discarded.", flush=True)
+            return
+        scanner = NetworkScanner(args.approve_scope, args.profile, args.gateway, args.interval)
+        scanner.start_session(db)
+        print("APPROVED host discovery: " + scanner.scope + "; every " + str(scanner.interval) +
+              " seconds after completion. No enforcement. Ctrl+C or --stop ends collection.", flush=True)
+        try:
+            while scanner.scan_once(db):
+                print("Discovery stored successfully at " + datetime.utcnow().isoformat() + "Z", flush=True)
+                if args.once:
+                    break
+                for _ in range(scanner.interval):
+                    time.sleep(1)
+                    db.expire_all()
+                    if db.get(DiscoverySession, 1).stop_requested:
+                        return
+        finally:
+            scanner.finish(db)
+
+
+if __name__ == "__main__":
+    main()

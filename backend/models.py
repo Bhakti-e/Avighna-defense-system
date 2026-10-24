@@ -173,3 +173,34 @@ class Report(Base):
     __table_args__ = (
         Index('idx_report_created', 'created_at'),
     )
+
+
+class DiscoverySession(Base):
+    """One explicitly approved local collector session; never started by API."""
+    __tablename__ = "discovery_session"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(String(64), nullable=False)
+    scope = Column(String(64), nullable=False)
+    profile = Column(String(255), nullable=False)
+    status = Column(String(32), nullable=False)
+    interval_seconds = Column(Integer, nullable=False)
+    approved_at = Column(DateTime, nullable=False)
+    lease_expires = Column(DateTime, nullable=True)
+    last_success = Column(DateTime, nullable=True)
+    observed_count = Column(Integer, default=0)
+    stop_requested = Column(Boolean, default=False)
+    error = Column(Text, nullable=True)
+
+
+class DiscoveryRun(Base):
+    """Audit and evidence for each bounded discovery attempt."""
+    __tablename__ = "discovery_runs"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(String(64), nullable=False, index=True)
+    scope = Column(String(64), nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    status = Column(String(32), nullable=False)
+    observed_count = Column(Integer, nullable=True)
+    observations = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
