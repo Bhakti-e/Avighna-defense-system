@@ -26,6 +26,13 @@ READ_PATHS = {
     "/reports-db/incidents", "/reports-db/isolation/details",
     "/reports-db/observation/details", "/discovery/status",
 }
+LOCAL_READ_PATHS = {
+    "/devices/", "/alerts/", "/stats/dashboard", "/stats/network-activity",
+    "/stats/threat-trends", "/reports/list", "/reports-db/incidents",
+    "/reports-db/isolation/details", "/reports-db/observation/details", "/discovery/status",
+}
+LOCAL_ORIGINS = {"http://localhost:3000", "http://127.0.0.1:3000"}
+
 AUTH_WRITES = {"/auth/signup", "/auth/login", "/auth/logout"}
 
 
@@ -64,7 +71,15 @@ def create_app():
         public = (request.method in {"GET", "HEAD"} and path in {"/", "/health"}) or (
             request.method == "POST" and path in {"/auth/login", "/auth/signup"}
         ) or request.method == "OPTIONS"
-        if not public:
+        # Account-free local reads: preflight header, exact Origin and Host.
+        # This is not user authentication; never expose through a proxy/tunnel.
+        local_view = (
+            request.method == "GET" and path in LOCAL_READ_PATHS
+            and request.headers.get("X-AVIGHNA-Local-View") == "1"
+            and request.headers.get("Origin") in LOCAL_ORIGINS
+            and request.headers.get("Host") in {"127.0.0.1:8000", "localhost:8000"}
+        )
+        if not public and not local_view:
             permission = "read" if readable or path == "/auth/logout" else "admin"
             try:
                 await run_in_threadpool(authorize_header, request.headers.get("Authorization", ""), permission)
@@ -85,7 +100,7 @@ def create_app():
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
         allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "X-AVIGHNA-Local-View"],
     )
 
     @app.get("/")

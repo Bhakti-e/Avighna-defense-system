@@ -29,8 +29,15 @@ npm run build
 npm run start -- --hostname 127.0.0.1
 ```
 
-Open http://localhost:3000 and create a preview account. Use only local test data.
-A key rotation requires API restart and sign-in again. Never include keys or tokens in failure reports.
+Open http://localhost:3000 directly; no account is required for local dashboard viewing.
+Login, signup, recovery and profile pages redirect to the dashboard.
+Read access is intentionally available to local users through the trusted localhost
+ dashboard origin, explicit browser header and fixed API Host allowlist. This is
+not user authentication and must not be exposed through a reverse proxy or tunnel.
+Action endpoints still require authentication and remain disabled. SECRET_KEY is
+still required; no default key or automatic administrator session is created.
+Use only local test data.
+A key rotation requires API restart and invalidates existing authenticated API sessions. Never include keys or tokens in failure reports.
 
 ## Checklist
 
@@ -76,3 +83,7 @@ No tags, GitHub Releases, binaries, packages, public deployments or announcement
 After the user's manual results, prepare a candidate summary with tested hash,
 automated/manual results, limitations, platforms, dependency/security checks and
 proposed notes/assets. Each release action needs separate explicit approval.
+
+Local-view manual check: open a private browser window, visit /devices, then /login
+and /signup. Inventory should load without credentials; account URLs should redirect
+to /. Confirm no Logout/Profile controls appear. Manual acceptance is pending.

@@ -26,12 +26,19 @@ test("rejects other origins before sending credentials", async () => {
   const s = setup(); await assert.rejects(s.apiFetch("https://example.com/devices/"), /another API origin/);
   assert.equal(s.calls.length, 0);
 });
-test("expired session clears local credentials and returns to login", async () => {
-  const s = setup(401); await assert.rejects(s.apiFetch("/devices/"), /session expired/);
-  assert.equal(s.values.size, 0); assert.deepEqual(s.redirects, ["/login"]);
+test("authentication failure clears stale credentials without showing login", async () => {
+  const s = setup(401); await assert.rejects(s.apiFetch("/devices/"), /requires authentication/);
+  assert.equal(s.values.size, 0); assert.deepEqual(s.redirects, []);
 });
 test("permission failure preserves session and reports error", async () => {
   const s = setup(403, { detail: "Permission denied" });
   await assert.rejects(s.apiFetch("/actions/quarantine"), /Permission denied/);
   assert.equal(s.values.size, 2); assert.equal(s.redirects.length, 0);
+});
+
+test("local viewing works without a stored token", async () => {
+  const s = setup(); s.values.clear(); await s.apiFetch("/devices/");
+  assert.equal(s.calls[0].init.headers.get("X-AVIGHNA-Local-View"), "1");
+  assert.equal(s.calls[0].init.headers.get("Authorization"), null);
+  assert.equal(s.redirects.length, 0);
 });

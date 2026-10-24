@@ -2,22 +2,14 @@
 import { apiFetch } from "@/lib/api";
 
 import { useEffect, useState } from "react";
-import { Bell, Shield, AlertTriangle, ChevronDown, User, Settings, LogOut } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { Bell, Shield, AlertTriangle } from "lucide-react";
 
 export default function Topbar() {
-  const router = useRouter();
   const [stats, setStats] = useState({ devices: 0, alerts: 0 });
-  const [username, setUsername] = useState("User");
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
 
   useEffect(() => {
-    // Get username
-    const user = localStorage.getItem("avighna_user");
-    if (user) setUsername(user);
-
     fetchStats();
     fetchNotifications();
     const interval = setInterval(() => {
@@ -78,12 +70,6 @@ export default function Topbar() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("avighna_token");
-    localStorage.removeItem("avighna_user");
-    router.push("/login");
-  };
-
   return (
     <div className="glass border-b border-border px-6 py-4">
       <div className="flex items-center justify-between">
@@ -142,41 +128,7 @@ export default function Topbar() {
             )}
           </div>
           
-          {/* Profile Dropdown */}
-          <div className="relative">
-            <button 
-              onClick={() => setShowProfileMenu(!showProfileMenu)}
-              className="flex items-center space-x-2 px-3 py-2 rounded-lg hover:bg-card transition-colors"
-            >
-              <span className="w-2 h-2 bg-success rounded-full"></span>
-              <span className="text-sm font-medium">{username}</span>
-              <ChevronDown className="w-4 h-4" />
-            </button>
-
-            {/* Profile Menu Dropdown */}
-            {showProfileMenu && (
-              <div className="absolute right-0 mt-2 w-48 glass rounded-lg shadow-lg border border-border z-[9999]">
-                <button
-                  onClick={() => {
-                    setShowProfileMenu(false);
-                    router.push("/profile");
-                  }}
-                  className="w-full flex items-center space-x-2 px-4 py-3 hover:bg-card transition-colors text-left rounded-t-lg"
-                >
-                  <User className="w-4 h-4" />
-                  <span>Profile</span>
-                </button>
-                <div className="border-t border-border"></div>
-                <button
-                  onClick={handleLogout}
-                  className="w-full flex items-center space-x-2 px-4 py-3 hover:bg-destructive/20 text-destructive transition-colors text-left rounded-b-lg"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span>Logout</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <span className="text-sm text-muted-foreground">Local workspace</span>
         </div>
       </div>
     </div>

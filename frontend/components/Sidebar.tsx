@@ -1,24 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { 
-  Shield, 
-  Activity, 
-  Eye, 
-  AlertTriangle, 
-  FileText, 
-  Settings, 
-  Plus,
-  Target,
-  LogOut,
-  User
-} from "lucide-react";
-import { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
+import { Shield, Activity, FileText, Settings, Target } from "lucide-react";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: Shield },
-  { name: "Register Device", href: "/register", icon: Plus },
+  { name: "Device Inventory", href: "/devices", icon: Activity },
   { name: "FOX", href: "/threat-intelligence", icon: Target },
   { name: "Reports", href: "/reports", icon: FileText },
   { name: "Settings", href: "/settings", icon: Settings },
@@ -26,24 +14,6 @@ const navigation = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
-  const [username, setUsername] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Get username from localStorage
-    const user = localStorage.getItem("avighna_user");
-    setUsername(user);
-  }, []);
-
-  const handleLogout = () => {
-    // Clear auth data
-    localStorage.removeItem("avighna_token");
-    localStorage.removeItem("avighna_user");
-    
-    // Redirect to login
-    router.push("/login");
-  };
-
   return (
     <div className="w-64 glass border-r border-border flex flex-col">
       <div className="p-6 border-b border-border">
@@ -81,40 +51,8 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* System Status & Logout */}
-      <div className="p-4 border-t border-border space-y-3">
-        {/* System Status */}
-        <div className="glass p-3 rounded-lg">
-          <div className="text-xs space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Monitoring</span>
-              <span className="flex items-center text-success text-xs">
-                <span className="w-1.5 h-1.5 bg-success rounded-full mr-1.5"></span>
-                Active
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Backend</span>
-              <span className="flex items-center text-success text-xs">
-                <span className="w-1.5 h-1.5 bg-success rounded-full mr-1.5"></span>
-                Connected
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Last Scan</span>
-              <span className="text-xs">2m ago</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Logout Button */}
-        <button
-          onClick={handleLogout}
-          className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg bg-card hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors text-sm"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-          <span>Logout</span>
-        </button>
+      <div className="p-4 border-t border-border text-xs text-muted-foreground">
+        Local prototype - no account required. See the collection banner for live status.
       </div>
     </div>
   );

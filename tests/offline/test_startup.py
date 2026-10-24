@@ -243,3 +243,35 @@ def test_health_reflects_collector_lease_without_starting_collection(application
         finally:
             db.delete(row)
             db.commit()
+
+LOCAL_HEADERS = {"Authorization": "", "Origin": "http://localhost:3000",
+                 "Host": "127.0.0.1:8000", "X-AVIGHNA-Local-View": "1"}
+
+@pytest.mark.parametrize("path", ["/devices/", "/alerts/", "/discovery/status", "/stats/dashboard"])
+def test_local_dashboard_reads_without_account(application, path):
+    client, _ = application
+    assert client.get(path, headers=LOCAL_HEADERS).status_code == 200
+
+@pytest.mark.parametrize("change", [
+    {"Origin": "https://foreign.example"}, {"Origin": ""},
+    {"Host": "foreign.example:8000"}, {"X-AVIGHNA-Local-View": ""},
+])
+def test_local_view_rejects_foreign_site_or_rebinding(application, change):
+    client, _ = application
+    assert client.get("/devices/", headers={**LOCAL_HEADERS, **change}).status_code == 401
+
+@pytest.mark.parametrize("path", ["/actions/quarantine", "/investigation/execute", "/network/scan/now"])
+def test_local_view_does_not_authorize_actions(application, path):
+    client, _ = application
+    assert client.post(path, headers=LOCAL_HEADERS, json={}).status_code == 401
+
+def test_local_view_does_not_expose_account(application):
+    client, _ = application
+    assert client.get("/auth/me", headers=LOCAL_HEADERS).status_code == 401
+
+def test_remote_client_cannot_use_local_view(application):
+    from backend.main import app
+    async def remote(scope, receive, send):
+        await app(dict(scope, client=("192.0.2.20", 12345)), receive, send)
+    with TestClient(remote) as client:
+        assert client.get("/devices/", headers=LOCAL_HEADERS).status_code == 403
