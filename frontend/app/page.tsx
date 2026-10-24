@@ -65,28 +65,7 @@ export default function Dashboard() {
   };
 
   const fetchThreatIntel = async () => {
-    // Mock threat intelligence data
-    // In production, this would fetch from real CTI feeds
-    setThreatIntel([
-      {
-        title: "CVE-2024-1234: Critical RCE in Apache",
-        source: "CISA",
-        severity: "CRITICAL",
-        timestamp: new Date().toISOString()
-      },
-      {
-        title: "Ransomware campaign targeting SMBs",
-        source: "Cisco Talos",
-        severity: "HIGH",
-        timestamp: new Date().toISOString()
-      },
-      {
-        title: "New botnet activity detected",
-        source: "AlienVault OTX",
-        severity: "MEDIUM",
-        timestamp: new Date().toISOString()
-      }
-    ]);
+    setThreatIntel([]); // No live feed connected; never fabricate intelligence.
   };
 
   return (
@@ -94,19 +73,19 @@ export default function Dashboard() {
       <div>
         <h1 className="text-3xl font-bold">Defense Dashboard</h1>
         <p className="text-muted-foreground mt-2">
-          Real-time network threat monitoring and response
+          Network visibility prototype. Threat detection and response remain under validation.
         </p>
       </div>
 
       {/* Dashboard Cards with Glows */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <DashboardCard
-          title="Live Devices"
+          title="Stored Devices"
           count={stats.devices}
           icon={<Activity className="w-6 h-6" />}
           color="green"
           href="/devices"
-          description="Active network devices"
+          description="Open inventory for observed hosts and timestamps"
           glow="green"
         />
 
@@ -162,7 +141,7 @@ export default function Dashboard() {
           <div className="relative">
             <div className="flex items-start justify-between mb-4">
               <div className="flex-1">
-                <p className="text-sm text-muted-foreground mb-2">FOX Intel</p>
+                <p className="text-sm text-muted-foreground mb-2">Threat intelligence (not connected)</p>
                 <div className="flex items-center space-x-2">
                   <Target className="w-5 h-5 text-blue-500" />
                   <h2 className="text-2xl font-bold">{threatIntel.length}</h2>
@@ -183,7 +162,7 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-            <p className="text-xs text-blue-500 mt-3">View all threats →</p>
+            <p className="text-xs text-blue-500 mt-3">View preview limitations →</p>
           </div>
         </div>
       </div>
